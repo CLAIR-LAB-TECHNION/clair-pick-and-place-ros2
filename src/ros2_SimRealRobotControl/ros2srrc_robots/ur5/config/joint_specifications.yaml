@@ -1,0 +1,17 @@
+# ROS 2 Sim-to-Real Robot Control -> ROBOT-JOINT SPECIFICATIONS (Universal Robots UR5)
+# Joint order: [shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3]
+# 
+# Shoulder lift joint (index 1) restricted to prevent shoulder from going too far down
+# shoulder_lift_joint < 0 (negative) = arm pointing UP (standing position, -90°)
+# shoulder_lift_joint = 0 = horizontal
+# shoulder_lift_joint > 0 (positive) = arm pointing DOWN (sleeping position)
+# Min/Max here are in DEGREES (MoveJ action sends degrees; movej.cpp compares against these).
+# We allow down to -90° (standing) but prevent going further down (more negative).
+#
+# Elbow joint (index 2) restricted to prevent elbow-down configurations
+# elbow_joint = 0 degrees = straight (elbow UP position)
+# elbow_joint < 0 = elbow DOWN (BLOCKED by setting min to 0.0)
+# elbow_joint > 0 = elbow UP (allowed up to 180 degrees)
+Limits:
+  Max: [360.0, 180.0, 180.0, 360.0, 360.0, 360.0]
+  Min: [-360.0, -90.0, 0.0, -360.0, -360.0, -360.0]

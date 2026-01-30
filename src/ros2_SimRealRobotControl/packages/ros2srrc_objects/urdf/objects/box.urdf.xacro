@@ -1,0 +1,223 @@
+<?xml version="1.0"?>
+
+<!-- 
+  BOX.URDF.XACRO - Parametric rectangular box object for Gazebo simulation
+                   (Unlike cube.urdf.xacro, this allows different X, Y, Z dimensions)
+  
+  Parameters:
+    - name: Object name (default: "box")
+    - size_x: Box X dimension in meters (default: 0.05)
+    - size_y: Box Y dimension in meters (default: 0.03)
+    - size_z: Box Z dimension in meters (default: 0.02)
+    - mass: Object mass in kg (default: 0.1 = 100g)
+    - color: Material color - red, green, blue, yellow, orange, purple, white, black
+             (default: "yellow")
+  
+  Usage with SpawnObject.py:
+    ros2 run ros2srrc_execution SpawnObject.py
+      - -package ros2srrc_objects
+      - -urdf box.urdf.xacro
+      - -name my_box
+      - -x 0.5 -y 0.0 -z 0.8
+-->
+
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="box">
+
+  <!-- ==================== PARAMETERS ==================== -->
+  
+  <!-- Object name - used for link names and Gazebo plugin -->
+  <xacro:arg name="name" default="box"/>
+  
+  <!-- Box dimensions (meters) -->
+  <xacro:arg name="size_x" default="0.05"/>
+  <xacro:arg name="size_y" default="0.03"/>
+  <xacro:arg name="size_z" default="0.02"/>
+  
+  <!-- Mass (kg) -->
+  <xacro:arg name="mass" default="0.1"/>
+  
+  <!-- Color selection -->
+  <xacro:arg name="color" default="yellow"/>
+
+  <!-- ==================== COMPUTED PROPERTIES ==================== -->
+  
+  <xacro:property name="obj_name" value="$(arg name)"/>
+  <xacro:property name="obj_x" value="$(arg size_x)"/>
+  <xacro:property name="obj_y" value="$(arg size_y)"/>
+  <xacro:property name="obj_z" value="$(arg size_z)"/>
+  <xacro:property name="obj_mass" value="$(arg mass)"/>
+  <xacro:property name="obj_color" value="$(arg color)"/>
+  
+  <!-- Inertia for a solid rectangular box: -->
+  <!-- Ixx = (1/12) * m * (y^2 + z^2) -->
+  <!-- Iyy = (1/12) * m * (x^2 + z^2) -->
+  <!-- Izz = (1/12) * m * (x^2 + y^2) -->
+  <xacro:property name="inertia_xx" value="${(1.0/12.0) * obj_mass * (obj_y * obj_y + obj_z * obj_z)}"/>
+  <xacro:property name="inertia_yy" value="${(1.0/12.0) * obj_mass * (obj_x * obj_x + obj_z * obj_z)}"/>
+  <xacro:property name="inertia_zz" value="${(1.0/12.0) * obj_mass * (obj_x * obj_x + obj_y * obj_y)}"/>
+
+  <!-- ==================== COLOR MATERIALS ==================== -->
+  
+  <material name="red">
+    <color rgba="0.8 0.1 0.1 1.0"/>
+  </material>
+  
+  <material name="green">
+    <color rgba="0.1 0.8 0.1 1.0"/>
+  </material>
+  
+  <material name="blue">
+    <color rgba="0.1 0.1 0.8 1.0"/>
+  </material>
+  
+  <material name="yellow">
+    <color rgba="0.9 0.9 0.1 1.0"/>
+  </material>
+  
+  <material name="orange">
+    <color rgba="1.0 0.5 0.0 1.0"/>
+  </material>
+  
+  <material name="purple">
+    <color rgba="0.6 0.1 0.8 1.0"/>
+  </material>
+  
+  <material name="white">
+    <color rgba="0.95 0.95 0.95 1.0"/>
+  </material>
+  
+  <material name="black">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+  
+  <material name="grey">
+    <color rgba="0.5 0.5 0.5 1.0"/>
+  </material>
+
+  <!-- ==================== LINK DEFINITION ==================== -->
+  
+  <link name="${obj_name}">
+    
+    <!-- Visual geometry -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${obj_x} ${obj_y} ${obj_z}"/>
+      </geometry>
+      <material name="${obj_color}"/>
+    </visual>
+    
+    <!-- Collision geometry -->
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${obj_x} ${obj_y} ${obj_z}"/>
+      </geometry>
+    </collision>
+    
+    <!-- Inertial properties -->
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${obj_mass}"/>
+      <inertia 
+        ixx="${inertia_xx}" ixy="0.0" ixz="0.0"
+        iyy="${inertia_yy}" iyz="0.0"
+        izz="${inertia_zz}"/>
+    </inertial>
+    
+  </link>
+
+  <!-- ==================== GAZEBO PROPERTIES ==================== -->
+  
+  <!-- Gazebo material colors -->
+  <xacro:if value="${obj_color == 'red'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Red</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'green'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Green</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'blue'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Blue</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'yellow'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Yellow</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'orange'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Orange</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'purple'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Purple</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'white'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/White</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'black'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Black</material>
+    </gazebo>
+  </xacro:if>
+  
+  <xacro:if value="${obj_color == 'grey'}">
+    <gazebo reference="${obj_name}">
+      <material>Gazebo/Grey</material>
+    </gazebo>
+  </xacro:if>
+
+  <!-- Gazebo physics properties -->
+  <gazebo reference="${obj_name}">
+    <mu1>1.5</mu1>
+    <mu2>1.5</mu2>
+    <kp>1000000.0</kp>
+    <kd>1000.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>0.1</maxVel>
+    <selfCollide>false</selfCollide>
+  </gazebo>
+
+  <!-- ==================== GAZEBO PLUGINS ==================== -->
+  
+  <!-- Make box static if mass >= 500kg (used as table/fixture) -->
+  <xacro:if value="${obj_mass >= 500}">
+    <gazebo>
+      <static>true</static>
+    </gazebo>
+  </xacro:if>
+  
+  <!-- Ground truth pose publisher -->
+  <gazebo>
+    <plugin name="p3d_${obj_name}" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>/</namespace>
+        <remapping>odom:=object_poses/${obj_name}</remapping>
+      </ros>
+      <body_name>${obj_name}</body_name>
+      <frame_name>world</frame_name>
+      <update_rate>30.0</update_rate>
+      <xyz_offset>0 0 0</xyz_offset>
+      <rpy_offset>0 0 0</rpy_offset>
+      <gaussian_noise>0.0</gaussian_noise>
+    </plugin>
+  </gazebo>
+
+</robot>
