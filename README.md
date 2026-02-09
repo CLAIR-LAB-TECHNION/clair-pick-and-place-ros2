@@ -12,7 +12,6 @@ This project introduces a high-level execution layer for pick-and-place: **Pick*
 
 ![General architecture overview](doc/diagrams/00-general-architecture.svg)
 
-*Source: [doc/diagrams/00-general-architecture.mmd](doc/diagrams/00-general-architecture.mmd).* More diagrams (data flow, deployment, class diagram) are in **[doc/ARCHITECTURE.md](doc/ARCHITECTURE.md)**.
 
 ### Class diagram
 
@@ -20,7 +19,6 @@ HLD-level UML of the execution layer (Pick, Place, robot client, gripper).
 
 ![Class diagram](doc/diagrams/07-class-diagram.svg)
 
-*Source: [doc/diagrams/07-class-diagram.mmd](doc/diagrams/07-class-diagram.mmd).*
 
 **Packages in this workspace:**
 
