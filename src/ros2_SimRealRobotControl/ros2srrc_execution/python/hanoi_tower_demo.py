@@ -359,9 +359,8 @@ class TowerOfHanoi:
         # to get the final cube center position
         z = target_surface_z
         
-        # Calculate expected place_z_offset for logging (place.py will calculate this)
-        # place.py uses: cube_height/2 + 0.02m (gripper clearance)
-        gripper_clearance = 0.02  # 2cm clearance for gripper (matches place.py)
+        # Calculate expected place_z_offset for logging (place.py: cube_height/2 + 0.07m; post_open_push_down 0.02m)
+        gripper_clearance = 0.02  # used only for expected_cube_center_z log; place.py uses 0.07 for offset
         expected_offset = (cube_size / 2.0) + gripper_clearance
         expected_cube_center_z = z + expected_offset
         # After opening, cube will be pushed down by gripper_clearance to settle on surface
@@ -408,13 +407,18 @@ class TowerOfHanoi:
             cubes_on_peg = [self.cube_names[i] for i in self.pegs[peg_idx]]
             print(f"  Peg {peg_idx}: {cubes_on_peg if cubes_on_peg else '[]'}")
     
-    def move_cube(self, from_peg, to_peg):
+    def move_cube(self, from_peg, to_peg, expected_cube_index=None):
         """
-        Move the top cube from one peg to another
+        Move the top cube from one peg to another.
+        
+        When expected_cube_index is set (e.g. from the pre-computed sequence), verifies that
+        the top of from_peg is that cube; if not, state is out of sync (e.g. after a failed move)
+        and we abort this move to avoid placing the wrong cube (e.g. biggest on smallest).
         
         Args:
             from_peg: Source peg index (0, 1, or 2)
             to_peg: Destination peg index (0, 1, or 2)
+            expected_cube_index: If set, require that the top of from_peg is this cube (sequence consistency)
         
         Returns:
             True if successful, False otherwise
@@ -427,11 +431,17 @@ class TowerOfHanoi:
         cube_index = self.pegs[from_peg][-1]
         cube_name = self.cube_names[cube_index]
         
+        # Require sequence consistency: if solver said "move cube_X", the top of from_peg must be cube_X
+        if expected_cube_index is not None and cube_index != expected_cube_index:
+            expected_name = self.cube_names[expected_cube_index]
+            print(f"ERROR: State out of sync. Sequence expected {expected_name} on top of Peg {from_peg}, but Peg {from_peg} has {cube_name} on top (e.g. a previous move failed). Aborting this move to avoid invalid placement.")
+            return False
+        
         # Check if move is valid (destination peg empty or top cube is larger)
-        # Note: cube_index 0 = smallest, higher index = larger
-        if self.pegs[to_peg] and self.pegs[to_peg][-1] < cube_index:
-            print(f"WARNING: Cannot place {cube_name} on smaller cube! Attempting anyway...")
-            # Don't return False here - let the robot try, it might work if cubes are same size
+        # Note: smaller list index = larger physical size (cube_0 largest, cube_4 smallest)
+        if self.pegs[to_peg] and cube_index < self.pegs[to_peg][-1]:
+            print(f"ERROR: Invalid move — would place {cube_name} (larger) on top of {self.cube_names[self.pegs[to_peg][-1]]} (smaller) on Peg {to_peg}. State is out of sync (e.g. a previous move failed). Aborting this move.")
+            return False
         
         self.move_count += 1
         
@@ -565,8 +575,8 @@ class TowerOfHanoi:
             print(f"EXECUTING MOVE {move_num}/{len(self.move_sequence)}: {cube_name} from Peg {from_peg} to Peg {to_peg}")
             print(f"{'='*60}")
             
-            # Execute the move
-            success = self.move_cube(from_peg, to_peg)
+            # Execute the move (pass expected cube so we never move the wrong cube after a failed move)
+            success = self.move_cube(from_peg, to_peg, expected_cube_index=cube_index)
             
             if success:
                 self.successful_moves += 1
@@ -575,7 +585,9 @@ class TowerOfHanoi:
                 self.failed_moves += 1
                 all_successful = False
                 print(f"✗ Move {move_num} FAILED - continuing with next move...")
-                # Continue execution even if a move fails
+                # Note: If the failure was due to "State out of sync" or "Invalid move", subsequent
+                # moves will likely also fail until the puzzle is reset. Consider re-running with
+                # --skip_spawn and --initial_state to resume from the current physical state.
         
         # Return to home position after finishing (whether all succeeded or some failed)
         print("\n" + "="*60)

@@ -45,8 +45,11 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from ros2srrc_data.msg import Robpose
 from nav_msgs.msg import Odometry
+from moveit_msgs.srv import GetPlanningScene
+from moveit_msgs.msg import PlanningSceneComponents
+from shape_msgs.msg import SolidPrimitive
 
-# Import the Pick class and yaw helper from pick_manual.py
+# Import the Pick class and yaw helper from pick_manual.py (gripper close % logic lives in PickConfig.get_gripper_close_percent)
 sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 'python'))
 from pick_manual import Pick, PickConfig, _quat_rotate_yaw_deg
 
@@ -99,6 +102,43 @@ class ObjectPoseGetter(Node):
                 return self.object_pose
         return None
 
+    def get_object_size_from_planning_scene(self, timeout_sec=2.0):
+        """
+        Get object size (meters) from MoveIt planning scene if the object is a collision object.
+        Returns float size (cube side or box first dimension), or None if not found or no geometry.
+        """
+        client = self.create_client(GetPlanningScene, '/get_planning_scene')
+        if not client.wait_for_service(timeout_sec=float(timeout_sec)):
+            self.get_logger().warn('GetPlanningScene service not available, cannot auto-detect object size.')
+            return None
+        request = GetPlanningScene.Request()
+        request.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_NAMES | PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        )
+        future = client.call_async(request)
+        deadline = time.time() + timeout_sec
+        while not future.done() and time.time() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not future.done():
+            return None
+        try:
+            response = future.result()
+            for obj in response.scene.world.collision_objects:
+                if obj.id != self.object_name:
+                    continue
+                if not obj.primitives:
+                    return None
+                prim = obj.primitives[0]
+                if prim.type == SolidPrimitive.BOX and len(prim.dimensions) >= 3:
+                    # Cube: use first dimension; box: use min as "grasp width"
+                    return float(min(prim.dimensions[0], prim.dimensions[1], prim.dimensions[2]))
+                if prim.type == SolidPrimitive.SPHERE and len(prim.dimensions) >= 1:
+                    return float(prim.dimensions[0] * 2.0)  # diameter as "size"
+                return None
+        except Exception as e:
+            self.get_logger().warn(f'Failed to get object size from planning scene: {e}')
+        return None
+
 
 def calculate_grasp_orientation(object_x, object_y, object_z, robot_base_x=0.0, robot_base_y=0.0, robot_base_z=0.0):
     """
@@ -113,44 +153,6 @@ def calculate_grasp_orientation(object_x, object_y, object_z, robot_base_x=0.0, 
     # This is the same orientation used in the working YAML examples (ur5_pick_and_place.yaml)
     # It represents a good top-down grasping pose that is reachable for most positions
     return -0.5, 0.5, 0.5, 0.5
-
-
-def calculate_gripper_close_percentage(cube_width, g_open=0.085, g_closed=0.00, margin=0.002, p_min=0.0, p_max=100.0):
-    """
-    Calculate the gripper close percentage based on cube width using geometry.
-    
-    For a parallel gripper, what matters is the cube width (the dimension between the fingers).
-    
-    Formula:
-        w_eff = w - margin  (effective width with squeeze margin)
-        p = 100 * ((g_open - w_eff) / (g_open - g_closed))
-        p = max(p_min, min(p, p_max))  (clamp to valid range)
-    
-    Args:
-        cube_width: Cube width in meters (dimension between fingers)
-        g_open: Inner distance between fingers when fully open (meters, default: 0.085 for Robotiq 2F-85 = 85mm)
-        g_closed: Inner distance when "100% closed" (meters, default: 0.00)
-        margin: Squeeze margin in meters to ensure grip (default: 0.002 = 2mm)
-        p_min: Minimum close percentage (default: 0.0)
-        p_max: Maximum close percentage (default: 100.0)
-    
-    Returns:
-        Close percentage (0-100) to use for gripper
-    """
-    # Apply squeeze margin
-    w_eff = cube_width - margin
-    
-    # Calculate percentage
-    if g_open == g_closed:
-        # Avoid division by zero - if open and closed are the same, return max
-        return p_max
-    
-    p = 100.0 * ((g_open - w_eff) / (g_open - g_closed))
-    
-    # Clamp to valid range
-    p = max(p_min, min(p, p_max))
-    
-    return p
 
 
 def AssignArgument(ARGUMENT):
@@ -239,22 +241,7 @@ def main(args=None):
     grasp_yaw_arg = AssignArgument("grasp_yaw_offset_deg")
     grasp_yaw_offset_deg = float(grasp_yaw_arg) if grasp_yaw_arg is not None else 0.0
     
-    # Calculate gripper close percentage if cube_size is provided
-    if cube_size_arg:
-        cube_width = float(cube_size_arg)
-        gripper_value = calculate_gripper_close_percentage(
-            cube_width=cube_width,
-            g_open=gripper_open,
-            g_closed=gripper_closed,
-            margin=gripper_margin
-        )
-
-    else:
-        gripper_value = default_gripper_value
-        print(f"[Pick]: Using default gripper close percentage: {gripper_value:.2f}%")
-        print(f"  (Tip: Provide cube_size:=<value> to calculate automatically)")
-        print("")
-    
+    DEFAULT_CUBE_SIZE = 0.05   # meters; fallback when cube_size not provided and not in planning scene
     print(f"Object: {object_name}")
     print(f"Robot: {robot}, EE Type: {ee_type}, EE Link: {ee_link}")
     print("")
@@ -284,6 +271,21 @@ def main(args=None):
     print(f"[Pick]: Object pose retrieved successfully!")
     print(f"  Position: x={object_pose.x:.3f}, y={object_pose.y:.3f}, z={object_pose.z:.3f}")
     print(f"  Original orientation: qx={object_pose.qx:.3f}, qy={object_pose.qy:.3f}, qz={object_pose.qz:.3f}, qw={object_pose.qw:.3f}")
+    
+    # Resolve cube size: from arg, or from MoveIt planning scene, or default (same gripper logic as Hanoi)
+    if cube_size_arg:
+        cube_size_for_config = float(cube_size_arg)
+        print(f"[Pick]: cube_size:={cube_size_arg} -> gripper close % from width (same logic as Hanoi).")
+    else:
+        scene_size = pose_getter.get_object_size_from_planning_scene(timeout_sec=2.0)
+        if scene_size is not None:
+            cube_size_for_config = scene_size
+            print(f"[Pick]: Object size from MoveIt planning scene: {cube_size_for_config:.3f}m -> gripper close % from width (same logic as Hanoi).")
+        else:
+            cube_size_for_config = DEFAULT_CUBE_SIZE
+            print(f"[Pick]: Object not in planning scene (or no geometry) -> using default width {DEFAULT_CUBE_SIZE}m; gripper close % from width (same logic as Hanoi).")
+            print(f"  (Tip: Pass cube_size:=<value> or ensure object is in MoveIt scene to auto-detect size)")
+    print("")
     
     if pose_only:
         print("")
@@ -405,19 +407,21 @@ def main(args=None):
     print("Executing Automated Pick action...")
     print("")
     
-    # Explicitly enable fallbacks with proper configuration
-    # This ensures the robot tries PTP (fixed kinematics) first, then falls back to different solutions
+    # Config: always pass cube_size so gripper close % is computed from width (same logic as Hanoi)
     config = {
         "approach_height": approach_height,
         "grasp_z_offset": grasp_z_offset,
-        "gripper_value": gripper_value,
-        "fallback_enabled": fallback_enabled,  # Use parsed value (default: True)
-        "max_attempts": max_attempts,  # Use parsed value (default: 12)
-        "yaw_candidates_deg": [0.0, 30.0, -30.0, 60.0, -60.0, 90.0],  # Try different orientations
-        "approach_height_candidates": [0.22, 0.20, 0.18],  # First value = default; works for all cube sizes up to ~80mm
-        "grasp_z_offset_candidates": [0.04, 0.03, 0.02],  # First value = default
-        "prefer_lin_descend": False,  # Try PTP (fixed/joint space) first, then LIN fallback
-        "min_lift_height": min_lift_height  # Minimum lift height to clear obstacles above
+        "fallback_enabled": fallback_enabled,
+        "max_attempts": max_attempts,
+        "yaw_candidates_deg": [0.0, 30.0, -30.0, 60.0, -60.0, 90.0],
+        "approach_height_candidates": [0.22, 0.20, 0.18],
+        "grasp_z_offset_candidates": [0.04, 0.03, 0.02],
+        "prefer_lin_descend": False,
+        "min_lift_height": min_lift_height,
+        "gripper_open": gripper_open,
+        "gripper_closed": gripper_closed,
+        "gripper_margin": gripper_margin,
+        "cube_size": cube_size_for_config,
     }
     
     if min_lift_height is not None:

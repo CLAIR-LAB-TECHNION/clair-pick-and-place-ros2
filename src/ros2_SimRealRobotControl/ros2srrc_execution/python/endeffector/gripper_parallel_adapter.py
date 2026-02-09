@@ -35,3 +35,9 @@ class ParallelGripperAdapter(GripperInterface):
             "Message": res.get("Message", ""),
             "ExecTime": res.get("ExecTime", -1.0),
         }
+
+    def add_object_to_planning_scene(self, object_name, pose, size=0.05):
+        """Add object to MoveIt planning scene (e.g. after place) so next pick can get size."""
+        if hasattr(self._pg, "add_object_to_planning_scene"):
+            return self._pg.add_object_to_planning_scene(object_name, pose, size=size)
+        return False

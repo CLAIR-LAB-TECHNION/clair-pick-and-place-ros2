@@ -9,6 +9,11 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from ros2srrc_data.msg import Robpose
 
+# UR5 typical reach: cap approach/retract Z so MoveIt can find IK (high placements e.g. Hanoi stacks)
+MAX_APPROACH_Z = 1.0   # meters (world Z)
+# Height for transit waypoint when approaching place: go here first to avoid sweeping cube over table/pegs
+SAFE_TRANSIT_Z = 0.85  # meters (world Z); use when approach Z is below this
+
 
 class PlaceConfig:
     """Configuration parameters for the Place action."""
@@ -20,16 +25,22 @@ class PlaceConfig:
         Args:
             config_dict: Optional dictionary with configuration overrides
         """
-        # Default configuration values
-        self.approach_height = 0.5     # Z offset above place location for approach pose (meters)
-        self.place_z_offset = 0.07      # Z offset for place pose relative to target (meters; 7cm to avoid gripper/table collision)
+        # Default configuration values (approach_height 0.15 matches place.py; 0.5 would be unreachable for high placements)
+        self.approach_height = 0.15    # Z offset above place location for approach pose (meters)
+        self.place_z_offset = 0.07     # Z offset for place pose relative to target (meters; 7cm to avoid gripper/table collision)
         self.approach_speed = 1.0        # Speed for approach move (0.0-1.0, already max)
         self.descend_speed = 0.7         # Speed for descend to place (0.0-1.0; faster but still safe)
         self.retract_speed = 0.8         # Speed for retract after place (0.0-1.0)
         self.pre_open_lift_m = 0.0       # Optional upward move before opening (m); 0 = open at place height for precise drop
+        self.object_name = None          # If set, object is re-added to MoveIt scene after place (for next pick size lookup)
+        self.cube_size_for_scene = 0.05  # Size (m) when re-adding to scene; use real size so next pick gets correct gripper %
         
         # Override defaults with provided config
         if config_dict:
+            if "object_name" in config_dict:
+                self.object_name = config_dict["object_name"]
+            if "cube_size_for_scene" in config_dict:
+                self.cube_size_for_scene = float(config_dict["cube_size_for_scene"])
             if "approach_height" in config_dict:
                 self.approach_height = float(config_dict["approach_height"])
             if "place_z_offset" in config_dict:
@@ -85,31 +96,33 @@ class Place:
         Returns:
             tuple: (approach_pose, place_pose_calc, retract_pose) as Robpose messages
         """
-        # Approach pose: above the place location
+        # Place pose: at place height (slightly above place location center); go down 1 cm more for reliable release
+        place_pose_calc = Robpose()
+        place_pose_calc.x = place_pose.x
+        place_pose_calc.y = place_pose.y
+        place_pose_calc.z = place_pose.z + self.config.place_z_offset - 0.01
+        place_pose_calc.qx = place_pose.qx
+        place_pose_calc.qy = place_pose.qy
+        place_pose_calc.qz = place_pose.qz
+        place_pose_calc.qw = place_pose.qw
+
+        # Approach pose: above the place location; cap to MAX_APPROACH_Z for high placements (e.g. Hanoi)
+        raw_approach_z = place_pose.z + self.config.approach_height
+        approach_z = min(raw_approach_z, MAX_APPROACH_Z)
         approach_pose = Robpose()
         approach_pose.x = place_pose.x
         approach_pose.y = place_pose.y
-        approach_pose.z = place_pose.z + self.config.approach_height
+        approach_pose.z = max(place_pose_calc.z, approach_z)  # never below place pose
         approach_pose.qx = place_pose.qx
         approach_pose.qy = place_pose.qy
         approach_pose.qz = place_pose.qz
         approach_pose.qw = place_pose.qw
         
-        # Place pose: at place height (slightly above place location center)
-        place_pose_calc = Robpose()
-        place_pose_calc.x = place_pose.x
-        place_pose_calc.y = place_pose.y
-        place_pose_calc.z = place_pose.z + self.config.place_z_offset
-        place_pose_calc.qx = place_pose.qx
-        place_pose_calc.qy = place_pose.qy
-        place_pose_calc.qz = place_pose.qz
-        place_pose_calc.qw = place_pose.qw
-        
         # Retract pose: same as approach pose (retract back up)
         retract_pose = Robpose()
         retract_pose.x = place_pose.x
         retract_pose.y = place_pose.y
-        retract_pose.z = place_pose.z + self.config.approach_height
+        retract_pose.z = approach_pose.z
         retract_pose.qx = place_pose.qx
         retract_pose.qy = place_pose.qy
         retract_pose.qz = place_pose.qz
@@ -152,24 +165,70 @@ class Place:
         print(f"[Place]: Place Z offset: {self.config.place_z_offset}m")
         print("")
         
-        # ===== STEP 1: Move to approach pose (LIN first for direct path, PTP fallback) ===== #
-        print("[Place]: Step 1/4 - Moving to APPROACH pose (LIN)...")
-        approach_result = self.robot_client.RobMove_EXECUTE(
-            "PTP",
-            self.config.approach_speed,
-            approach_pose
-        )
-        if not approach_result["Success"]:
-            print("[Place]: PTP approach failed, trying LIN fallback...")
+        # ===== STEP 1a (optional): Move to safe transit height above target to avoid sweeping cube over table/pegs ===== #
+        if approach_pose.z < SAFE_TRANSIT_Z:
+            transit_pose = Robpose()
+            transit_pose.x = place_pose.x
+            transit_pose.y = place_pose.y
+            transit_pose.z = SAFE_TRANSIT_Z
+            transit_pose.qx = place_pose.qx
+            transit_pose.qy = place_pose.qy
+            transit_pose.qz = place_pose.qz
+            transit_pose.qw = place_pose.qw
+            print(f"[Place]: Step 1a - Moving to transit height Z={SAFE_TRANSIT_Z:.2f}m above target (avoids peg/table collision)...")
+            transit_result = self.robot_client.RobMove_EXECUTE(
+                "PTP", self.config.approach_speed, transit_pose
+            )
+            if not transit_result["Success"]:
+                print("[Place]: PTP transit failed, trying LIN...")
+                transit_result = self.robot_client.RobMove_EXECUTE(
+                    "LIN", self.config.approach_speed, transit_pose
+                )
+            if not transit_result["Success"]:
+                RES["Message"] = f"Place FAILED at Step 1a (Transit): {transit_result['Message']}"
+                print(f"[Place]: {RES['Message']}")
+                T_end = time.time()
+                RES["ExecTime"] = round(T_end - T_start, 4)
+                return RES
+            print("[Place]: Transit pose reached.")
+        
+        # ===== STEP 1b: Move to approach pose (PTP first, then LIN; then retry with lower approach height if needed) ===== #
+        approach_heights_to_try = [self.config.approach_height]
+        # If default is >= 0.10, add lower fallbacks (often fixes INVALID_MOTION_PLAN at Peg 2 / table)
+        if self.config.approach_height >= 0.10:
+            approach_heights_to_try.extend([0.08, 0.05])
+        approach_succeeded = False
+        for ah in approach_heights_to_try:
+            if ah != self.config.approach_height:
+                approach_pose.z = place_pose.z + ah
+                approach_pose.z = min(approach_pose.z, MAX_APPROACH_Z)
+                approach_pose.z = max(approach_pose.z, place_pose_calc.z)
+                retract_pose.z = approach_pose.z
+                print(f"[Place]: Retrying approach with lower height: {ah:.2f}m (approach Z={approach_pose.z:.3f}m)")
+            else:
+                print("[Place]: Step 1/4 - Moving to APPROACH pose (PTP first, then LIN)...")
             approach_result = self.robot_client.RobMove_EXECUTE(
-                "LIN",
+                "PTP",
                 self.config.approach_speed,
                 approach_pose
             )
-        
-        if not approach_result["Success"]:
+            if not approach_result["Success"]:
+                print("[Place]: PTP approach failed, trying LIN fallback...")
+                approach_result = self.robot_client.RobMove_EXECUTE(
+                    "LIN",
+                    self.config.approach_speed,
+                    approach_pose
+                )
+            if approach_result["Success"]:
+                approach_succeeded = True
+                if ah != self.config.approach_height:
+                    print(f"[Place]: Approach succeeded with height {ah:.2f}m.")
+                break
+        if not approach_succeeded:
             RES["Message"] = f"Place FAILED at Step 1 (Approach): {approach_result['Message']}"
             print(f"[Place]: {RES['Message']}")
+            print("[Place]: Why INVALID_MOTION_PLAN? MoveIt found no collision-free path from current pose to approach.")
+            print("[Place]: Common causes: (1) cube in gripper collides with table/peg along path  (2) target (x,y) awkward for arm  (3) try place at center first: x:=0 y:=0.58 z:=0.5")
             T_end = time.time()
             RES["ExecTime"] = round(T_end - T_start, 4)
             return RES
@@ -306,7 +365,23 @@ class Place:
         
         print("[Place]: Step 3/4 - Gripper opened successfully.")
         print("")
-               
+        
+        # Re-add placed object to MoveIt planning scene so next pick can get object size (gripper close %)
+        if getattr(self.config, 'object_name', None) and self.gripper_client is not None:
+            if hasattr(self.gripper_client, 'add_object_to_planning_scene'):
+                obj_name = self.config.object_name
+                size = getattr(self.config, 'cube_size_for_scene', 0.05)
+                # Object center when sitting on surface: (place_pose.x, place_pose.y, place_pose.z + size/2)
+                obj_center = Robpose()
+                obj_center.x = place_pose.x
+                obj_center.y = place_pose.y
+                obj_center.z = place_pose.z + (size / 2.0)
+                obj_center.qx = place_pose.qx
+                obj_center.qy = place_pose.qy
+                obj_center.qz = place_pose.qz
+                obj_center.qw = place_pose.qw
+                self.gripper_client.add_object_to_planning_scene(obj_name, obj_center, size=size)
+                print(f"[Place]: Re-added {obj_name} to MoveIt scene (size={size:.3f}m) for next pick.")
         
         # ===== STEP 4: Retract (LIN) ===== #
         print("[Place]: Step 4/4 - RETRACTING (LIN)...")

@@ -105,8 +105,8 @@ def main(args=None):
         print("  ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)")
         print("  ee_link:=EE_robotiq_2f85    End-effector link (default: EE_robotiq_2f85)")
         print("  approach_height:=0.15       Approach height in meters (default: 0.15)")
-        print("  place_z_offset:=0.07         Place Z offset (default: 0.08, place above target; min 0.07 to avoid table collision)")
-        print("  cube_size:=<value>          Cube size in meters (if provided, calculates offset = size/2 + 0.001m)")
+        print("  place_z_offset:=0.07         Place Z offset (default: 0.07 when cube_size not set; min 0.06 to avoid table collision)")
+        print("  cube_size:=<value>          Cube size in meters (if provided, offset = size/2 + 0.07m gripper clearance)")
         print("")
         print("Closing program... BYE!")
         rclpy.shutdown()
@@ -287,10 +287,15 @@ def main(args=None):
     else:
         post_open_push_down = 0.005  # 5mm default
     
+    # Re-add object to MoveIt scene after place (object_name + size) so next pick gets correct gripper close %
+    cube_size_for_scene = float(cube_size) if cube_size else 0.05
+    
     config = {
         "approach_height": approach_height,
         "place_z_offset": place_z_offset,
-        "post_open_push_down_m": post_open_push_down  # Push down after opening to settle cube on surface
+        "post_open_push_down_m": post_open_push_down,  # Push down after opening to settle cube on surface
+        "object_name": object_name,                      # If set, re-add to scene after place for next pick
+        "cube_size_for_scene": cube_size_for_scene,
     }
     
     PlaceAction = Place(RobotClient, EEClient, config)

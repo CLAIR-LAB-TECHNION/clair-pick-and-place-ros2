@@ -406,6 +406,19 @@ class parallelGR():
             
             # Initialise MoveIt scene manager:
             self.moveit_scene_manager = MoveItSceneManager()
+        else:
+            # Still need scene manager for add_object_to_planning_scene (e.g. after place)
+            self.moveit_scene_manager = MoveItSceneManager()
+
+    def add_object_to_planning_scene(self, object_name, pose, size=0.05):
+        """
+        Add an object to MoveIt planning scene at the given pose (e.g. after place).
+        So the next pick can get object size from the scene. pose is a Robpose with x,y,z.
+        """
+        if not hasattr(self, 'moveit_scene_manager') or self.moveit_scene_manager is None:
+            return False
+        self.moveit_scene_manager.add_to_moveit(object_name, pose, size=size)
+        return True
 
     def CLOSE(self, VAL):
         
@@ -462,6 +475,8 @@ class parallelGR():
 
             # Attach object BEFORE closing gripper
             if objNAME != "":
+                # If a previous pick failed after attach, the object may still be attached; detach first so ATTACH succeeds
+                self.LinkAttacher.DETACH(objNAME, timeout_sec=1.0)
                 print("[CLIENT - parallelGripper.py]: Attaching object BEFORE closing gripper...")
                 AttRES = self.LinkAttacher.ATTACH(objNAME)
                 if AttRES:
@@ -634,9 +649,10 @@ class parallelGR():
                                 break
             
             # If still not detached, try a few common names with short timeout (avoid 50s+ block)
+            # Include both cube0/cube1 and cube_0/cube_1 (Gazebo/spawn often use underscore)
             if not detached:
-                common_names = ["cube0", "cube1", "cube2", "cube3"]
-                print("[CLIENT - parallelGripper.py]: AttachCheck empty, trying a few common object names (short timeout)...")
+                common_names = ["cube_0", "cube_1", "cube_2", "cube_3", "cube0", "cube1", "cube2", "cube3"]
+                print("[CLIENT - parallelGripper.py]: AttachCheck empty, trying common object names (short timeout)...")
                 for try_name in common_names:
                     print(f"[CLIENT - parallelGripper.py]: Trying to detach: {try_name}")
                     DetRES = self.LinkAttacher.DETACH(try_name, timeout_sec=1.0)

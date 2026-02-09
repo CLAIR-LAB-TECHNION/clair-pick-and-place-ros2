@@ -8,6 +8,9 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from ros2srrc_data.msg import Robpose
 
+# UR5 reach: cap approach and lift Z so MoveIt can find IK (high stacks e.g. Hanoi)
+MAX_APPROACH_Z = 1.0   # meters (world Z)
+
 
 def _quat_rotate_yaw_deg(qx, qy, qz, qw, deg):
     """
@@ -27,6 +30,40 @@ def _quat_rotate_yaw_deg(qx, qy, qz, qw, deg):
     return (nx / n, ny / n, nz / n, nw / n)
 
 
+def calculate_gripper_close_percentage(
+    cube_width,
+    g_open=0.085,
+    g_closed=0.00,
+    margin=0.002,
+    p_min=0.0,
+    p_max=100.0,
+):
+    """
+    Calculate gripper close percentage (0-100) from object width for a parallel gripper.
+
+    Formula: effective_width = cube_width - margin; then
+    percent = 100 * (g_open - effective_width) / (g_open - g_closed), clamped to [p_min, p_max].
+
+    Used by Pick so that pick.py and Hanoi (which call pick with cube_size) get consistent close %.
+
+    Args:
+        cube_width: Object width in meters (dimension between fingers).
+        g_open: Inner distance between fingers when fully open (m; default 0.085 = 85mm for Robotiq 2F-85).
+        g_closed: Inner distance when fully closed (m; default 0.00).
+        margin: Squeeze margin in meters (default 0.002 = 2mm).
+        p_min: Minimum close percentage (default 0.0).
+        p_max: Maximum close percentage (default 100.0).
+
+    Returns:
+        Close percentage (0-100) to use for gripper.close(percent/100.0).
+    """
+    w_eff = cube_width - margin
+    if g_open == g_closed:
+        return p_max
+    p = 100.0 * ((g_open - w_eff) / (g_open - g_closed))
+    return max(p_min, min(p, p_max))
+
+
 class PickConfig:
     """Configuration parameters for the Pick action."""
     
@@ -43,7 +80,11 @@ class PickConfig:
         self.approach_speed = 1.0        # Speed for PTP approach move (0.0-1.0)
         self.descend_speed = 0.5         # Speed for LIN descend move (0.0-1.0)
         self.lift_speed = 0.6            # Speed for LIN lift move (0.0-1.0)
-        self.gripper_value = 50.0        # Gripper close percentage (0-100)
+        self.gripper_value = 50.0        # Gripper close percentage (0-100) when cube_size not set
+        self.gripper_open = 0.085        # Gripper open inner distance (m; 85mm for Robotiq 2F-85)
+        self.gripper_closed = 0.00       # Gripper closed inner distance (m)
+        self.gripper_margin = 0.002      # Squeeze margin (m; 2mm)
+        self.cube_size = None            # If set (meters), close % is computed from width; else use gripper_value
         self.min_lift_height = None      # Minimum lift height above object (meters, None = use approach_height)
         
         # Fallback candidates
@@ -68,6 +109,15 @@ class PickConfig:
                 self.lift_speed = float(config_dict["lift_speed"])
             if "gripper_value" in config_dict:
                 self.gripper_value = float(config_dict["gripper_value"])
+            if "gripper_open" in config_dict:
+                self.gripper_open = float(config_dict["gripper_open"])
+            if "gripper_closed" in config_dict:
+                self.gripper_closed = float(config_dict["gripper_closed"])
+            if "gripper_margin" in config_dict:
+                self.gripper_margin = float(config_dict["gripper_margin"])
+            if "cube_size" in config_dict:
+                val = config_dict["cube_size"]
+                self.cube_size = float(val) if val is not None else None
             if "fallback_enabled" in config_dict:
                 self.fallback_enabled = bool(config_dict["fallback_enabled"])
             if "max_attempts" in config_dict:
@@ -83,6 +133,20 @@ class PickConfig:
             if "min_lift_height" in config_dict:
                 val = config_dict["min_lift_height"]
                 self.min_lift_height = float(val) if val is not None else None
+
+    def get_gripper_close_percent(self):
+        """
+        Return gripper close percentage (0-100) for the grasp step.
+        If cube_size is set, compute from width using gripper_open/closed/margin; else return gripper_value.
+        """
+        if self.cube_size is not None:
+            return calculate_gripper_close_percentage(
+                self.cube_size,
+                g_open=self.gripper_open,
+                g_closed=self.gripper_closed,
+                margin=self.gripper_margin,
+            )
+        return self.gripper_value
 
 
 class Pick:
@@ -138,11 +202,11 @@ class Pick:
             # This ensures consistent parallel grasps regardless of cube's rotation in Gazebo
             qx, qy, qz, qw = -0.5, 0.5, 0.5, 0.5  # Fixed top-down orientation
 
-        # Approach pose: above the object
+        # Approach pose: above the object; cap Z to UR5 reach (high stacks)
         approach_pose = Robpose()
         approach_pose.x = object_pose.x
         approach_pose.y = object_pose.y
-        approach_pose.z = object_pose.z + ah
+        approach_pose.z = min(object_pose.z + ah, MAX_APPROACH_Z)
         approach_pose.qx, approach_pose.qy, approach_pose.qz, approach_pose.qw = qx, qy, qz, qw
 
         # Grasp pose: at grasp height (slightly above object center)
@@ -155,20 +219,24 @@ class Pick:
         # Lift pose: use min_lift_height if specified, otherwise use approach_height
         # This ensures we lift high enough to clear obstacles above the object
         lift_height = self.config.min_lift_height if self.config.min_lift_height is not None else ah
-        # Ensure lift height is at least as high as approach height
+        # Ensure lift height is at least as high as approach height (no extra +0.07 to avoid unreachable Z)
         lift_height = max(lift_height, ah)
+        # Cap absolute lift Z to UR5 reach so MoveIt can find IK (high stacks)
+        # Add 2 cm extra lift so cube clears obstacles when moving to place
+        raw_lift_z = object_pose.z + lift_height + 0.02
+        lift_z = min(raw_lift_z, MAX_APPROACH_Z)
         
         # Debug output for lift height calculation
         if self.config.min_lift_height is not None:
             print(f"[Pick]: Using min_lift_height: {self.config.min_lift_height:.3f}m (requested)")
             print(f"[Pick]: Approach height: {ah:.3f}m")
             print(f"[Pick]: Final lift height: {lift_height:.3f}m (relative to object center at z={object_pose.z:.3f}m)")
-            print(f"[Pick]: Absolute lift Z position: {object_pose.z + lift_height:.3f}m")
+            print(f"[Pick]: Absolute lift Z position: {lift_z:.3f}m")
         
         lift_pose = Robpose()
         lift_pose.x = object_pose.x
         lift_pose.y = object_pose.y
-        lift_pose.z = object_pose.z + lift_height
+        lift_pose.z = lift_z
         lift_pose.qx, lift_pose.qy, lift_pose.qz, lift_pose.qw = qx, qy, qz, qw
 
         return approach_pose, grasp_pose, lift_pose
@@ -272,12 +340,12 @@ class Pick:
             print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] Reached grasp, executing grasp+lift...")
             print("")
 
-            # Step 3: Close gripper
-            print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {self.config.gripper_value}%)...")
+            # Step 3: Close gripper (percent from config: either computed from cube_size or fixed gripper_value)
+            close_pct = self.config.get_gripper_close_percent()
+            print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {close_pct:.1f}%)...")
             if self.gripper_client is not None:
                 if hasattr(self.gripper_client, "close"):
-                    # Normalized percent (0.0–1.0); gripper_value is 0–100
-                    percent = self.config.gripper_value / 100.0
+                    percent = close_pct / 100.0
                     grasp_result = self.gripper_client.close(percent)
                 elif hasattr(self.gripper_client, "ACTIVATE"):
                     grasp_result = self.gripper_client.ACTIVATE()
@@ -286,8 +354,8 @@ class Pick:
                     T_end = time.time()
                     RES["ExecTime"] = round(T_end - T_start, 4)
                     return RES
-                if not grasp_result["Success"]:
-                    RES["Message"] = f"Pick FAILED at Step 3 (Grasp): {grasp_result['Message']}"
+                if not grasp_result.get("Success", False):
+                    RES["Message"] = f"Pick FAILED at Step 3 (Grasp): {grasp_result.get('Message', 'unknown')}"
                     T_end = time.time()
                     RES["ExecTime"] = round(T_end - T_start, 4)
                     return RES
@@ -413,12 +481,12 @@ class Pick:
         print("")
         
         # ===== STEP 3: Close gripper ===== #
-        print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {self.config.gripper_value}%)...")
+        close_pct = self.config.get_gripper_close_percent()
+        print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {close_pct:.1f}%)...")
         
         if self.gripper_client is not None:
-            # Gripper interface: close(percent) with percent 0.0–1.0
             if hasattr(self.gripper_client, 'close'):
-                percent = self.config.gripper_value / 100.0
+                percent = close_pct / 100.0
                 grasp_result = self.gripper_client.close(percent)
             # Vacuum gripper (has ACTIVATE method)
             elif hasattr(self.gripper_client, 'ACTIVATE'):
