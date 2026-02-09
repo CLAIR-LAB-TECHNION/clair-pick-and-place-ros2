@@ -1,0 +1,35 @@
+flowchart LR
+    User((User))
+
+    subgraph Actions["User-initiated actions"]
+        PickUp["Pick Up (x ∈ R⁶)"]
+        PutDown["Put Down (x ∈ R⁶)"]
+        Traverse["Traverse (x ∈ R⁶)"]
+        SetConstraints["Set Constraints (X ⊂ C)"]
+        SetConfig["Set configuration (c ∈ C)"]
+    end
+
+    subgraph Processing["Internal processing"]
+        Feasibility["Feasibility Check"]
+        IK["Inverse Kinematics"]
+        ErrorHandling["Error Handling"]
+    end
+
+    Grabriella((Grabriella))
+
+    User --> PickUp
+    User --> PutDown
+    User --> Traverse
+    User --> SetConstraints
+    User --> SetConfig
+
+    PickUp -->|includes| Traverse
+    PutDown -->|includes| Traverse
+    Traverse -.->|extends| Feasibility
+    SetConstraints -.->|Constraints| Feasibility
+    SetConfig -.-> Feasibility
+
+    Feasibility -->|includes| IK
+    Feasibility --> Grabriella
+    IK --> Grabriella
+    ErrorHandling --> Grabriella

@@ -1,0 +1,51 @@
+flowchart LR
+    subgraph Publishers
+        robpose_node[robpose node]
+        p3d[Gazebo p3d / objectpose]
+        scene[ConstraintsHandler / Spawn/Remove]
+    end
+
+    subgraph Topics
+        T_Robpose["/Robpose"]
+        T_ObjectPose["/object_poses/(name)"]
+        T_Planning["/planning_scene"]
+    end
+
+    subgraph Actions
+        A_Move["/Move"]
+        A_Robmove["/Robmove"]
+    end
+
+    subgraph Services
+        S_Attach["/ATTACHLINK"]
+        S_Detach["/DETACHLINK"]
+        S_Robotiq["/RobotiqGripper (optional)"]
+    end
+
+    subgraph Consumers
+        PickPlace[Pick / Place]
+        PG[ParallelGripper]
+        VG[VacuumGripper]
+        Move[move node]
+        Robmove[robmove node]
+    end
+
+    robpose_node --> T_Robpose
+    p3d --> T_ObjectPose
+    scene --> T_Planning
+
+    T_Robpose --> PickPlace
+    T_Robpose --> PG
+    T_Robpose --> VG
+    T_ObjectPose --> PickPlace
+    T_ObjectPose --> PG
+
+    PickPlace --> A_Move
+    PickPlace --> A_Robmove
+    A_Move --> Move
+    A_Robmove --> Robmove
+
+    PG --> S_Attach
+    PG --> S_Detach
+    VG --> S_Attach
+    VG --> S_Detach

@@ -1,0 +1,48 @@
+flowchart TB
+    subgraph Sim["Simulation (moveit2.launch.py)"]
+        GZ[Gazebo]
+        GZCtrl[gazebo_ros2_control]
+        MoveIt[MoveIt 2]
+        move_s[move]
+        robmove_s[robmove]
+        robpose_s[robpose]
+        LinkAttach[LinkAttacher plugin]
+        PG[ParallelGripper / VacuumGripper]
+    end
+
+    subgraph Real["Real robot (bringup_ur.launch.py)"]
+        UR[ur_robot_driver]
+        MoveItR[MoveIt 2]
+        move_r[move]
+        robmove_r[robmove]
+        robpose_r[robpose]
+        TwoFG7[OnRobot 2FG7 client]
+    end
+
+    subgraph Common["Common (run separately)"]
+        Exec[ExecuteProgram / Hanoi]
+        Pick[Pick / Place]
+    end
+
+    GZ --> GZCtrl
+    GZ --> LinkAttach
+    GZCtrl --> move_s
+    GZCtrl --> robmove_s
+    MoveIt --> move_s
+    MoveIt --> robmove_s
+    robpose_s --> Robpose
+    PG --> LinkAttach
+    PG --> move_s
+
+    UR --> move_r
+    UR --> robmove_r
+    MoveItR --> move_r
+    MoveItR --> robmove_r
+    robpose_r --> Robpose
+    TwoFG7 --> Exec
+
+    Exec --> Pick
+    Pick --> move_s
+    Pick --> move_r
+    Pick --> PG
+    Pick --> TwoFG7

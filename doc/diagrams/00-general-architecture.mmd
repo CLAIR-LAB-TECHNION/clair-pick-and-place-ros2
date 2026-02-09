@@ -1,0 +1,32 @@
+flowchart TB
+    subgraph User["User / Task layer"]
+        YAML[Task programs]
+        Exec[ExecuteProgram]
+        Hanoi[Tower of Hanoi demo]
+    end
+
+    subgraph Execution["Execution layer"]
+        PickPlace[Pick / Place]
+        Grippers[Gripper clients]
+    end
+
+    subgraph Motion["Motion / Planning layer"]
+        move[move]
+        robmove[robmove]
+        robpose[robpose]
+    end
+
+    subgraph Sim["Simulation"]
+        Gazebo[Gazebo]
+        World[World, object poses]
+    end
+
+    subgraph Real["Real robot"]
+        UR[ur_robot_driver]
+        TwoFG7[OnRobot 2FG7]
+    end
+
+    User --> Execution
+    Execution --> Motion
+    Motion --> Sim
+    Motion --> Real

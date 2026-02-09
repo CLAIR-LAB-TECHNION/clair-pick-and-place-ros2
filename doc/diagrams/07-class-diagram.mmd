@@ -1,0 +1,86 @@
+classDiagram
+    direction TB
+    class rclcppNode {
+        #node_options_
+        +get_logger()
+    }
+    class ExecuteProgram {
+        -sequence_
+        +getSEQUENCE()
+        +run()
+        -dispatch()
+    }
+    class ErrorHandler {
+        +interpret()
+        +handle_step_result()
+    }
+    class ConstraintsHandler {
+        +apply_constraints()
+    }
+    class ConfigurationHandler {
+        -config_
+        +set_configuration()
+        +get_configuration()
+    }
+    class Pick {
+        -robot_
+        -gripper_
+        -config_
+        +execute()
+        +execute_with_fallback()
+        -_calculate_poses()
+    }
+    class Place {
+        -robot_
+        -gripper_
+        -config_
+        +execute()
+        -_calculate_poses()
+    }
+    class RBT {
+        -move_client_
+        -robmove_client_
+        +Move_EXECUTE()
+        +RobMove_EXECUTE()
+        +CANCEL()
+    }
+    class MoveCLIENT {
+        -action_client_
+        +send_goal()
+        -goal_response_callback()
+    }
+    class RobMoveCLIENT {
+        -action_client_
+        +send_goal()
+        -goal_response_callback()
+    }
+    class GripperInterface {
+        +open()
+        +close()
+    }
+    class OnRobot2FG7Backend {
+        -robot_ip_
+        +open()
+        +close()
+    }
+    class ParallelGripperAdapter {
+        -ee_link_
+        +open()
+        +close()
+    }
+    ExecuteProgram ..> ErrorHandler
+    ExecuteProgram ..> ConstraintsHandler
+    ExecuteProgram ..> ConfigurationHandler
+    ExecuteProgram -- Pick
+    ExecuteProgram -- Place
+    Pick o-- RBT
+    Pick o-- GripperInterface
+    Place o-- RBT
+    Place o-- GripperInterface
+    rclcppNode <|-- MoveCLIENT
+    rclcppNode <|-- RobMoveCLIENT
+    RBT *-- MoveCLIENT
+    RBT *-- RobMoveCLIENT
+    GripperInterface <|-- OnRobot2FG7Backend
+    GripperInterface <|-- ParallelGripperAdapter
+    ExecuteProgram ..> GripperInterface

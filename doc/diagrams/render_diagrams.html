@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture diagrams – export SVG</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: false, theme: 'base' });
+
+    const diagrams = [
+      { id: '01-hld', name: 'HLD — High-level design', file: '01-hld-high-level-design.svg' },
+      { id: '02-control', name: 'Control flow: Robot + PC', file: '02-control-flow-robot-pc.svg' },
+      { id: '03-component', name: 'Component & package', file: '03-component-package.svg' },
+      { id: '04-dataflow', name: 'Data flow', file: '04-data-flow.svg' },
+      { id: '05-deployment', name: 'Deployment', file: '05-deployment.svg' },
+      { id: '06-dispatch', name: 'ExecuteProgram step dispatch', file: '06-execute-program-dispatch.svg' },
+      { id: '07-class', name: 'Class diagram', file: '07-class-diagram.svg' }
+    ];
+
+    async function renderAll() {
+      for (const d of diagrams) {
+        const container = document.getElementById(d.id);
+        const pre = container.querySelector('pre');
+        const code = pre.textContent.trim();
+        const { svg } = await mermaid.render('svg-' + d.id, code);
+        const wrap = document.createElement('div');
+        wrap.className = 'mermaid-wrap';
+        wrap.innerHTML = svg;
+        container.appendChild(wrap);
+        pre.style.display = 'none';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Download ' + d.file;
+        btn.onclick = () => downloadSvg(wrap.querySelector('svg'), d.file);
+        container.querySelector('.diagram-title').appendChild(btn);
+      }
+    }
+
+    function downloadSvg(svgEl, filename) {
+      if (!svgEl) return;
+      const s = new XMLSerializer().serializeToString(svgEl);
+      const blob = new Blob([s], { type: 'image/svg+xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    renderAll().catch(err => console.error(err));
+  </script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 0 auto; padding: 1rem; }
+    h1 { font-size: 1.25rem; }
+    .diagram-block { margin: 2rem 0; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    .diagram-title { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .diagram-title h2 { margin: 0; font-size: 1rem; }
+    .diagram-title button { padding: 0.35rem 0.75rem; cursor: pointer; }
+    .mermaid-wrap { overflow: auto; }
+    .mermaid-wrap svg { max-width: 100%; height: auto; }
+  </style>
+</head>
+<body>
+  <h1>Architecture diagrams – render and download SVG</h1>
+  <p>Diagrams are rendered below. Use each “Download …” button to save the SVG file.</p>
+
+  <div id="01-hld" class="diagram-block">
+    <div class="diagram-title"><h2>1. HLD — High-level design</h2></div>
+    <pre>flowchart LR
+    User((User))
+
+    subgraph Actions["User-initiated actions"]
+        PickUp["Pick Up (x ∈ R⁶)"]
+        PutDown["Put Down (x ∈ R⁶)"]
+        Traverse["Traverse (x ∈ R⁶)"]
+        SetConstraints["Set Constraints (X ⊂ C)"]
+        SetConfig["Set configuration (c ∈ C)"]
+    end
+
+    subgraph Processing["Internal processing"]
+        Feasibility["Feasibility Check"]
+        IK["Inverse Kinematics"]
+        ErrorHandling["Error Handling"]
+    end
+
+    Grabriella((Grabriella))
+
+    User --> PickUp
+    User --> PutDown
+    User --> Traverse
+    User --> SetConstraints
+    User --> SetConfig
+
+    PickUp -->|includes| Traverse
+    PutDown -->|includes| Traverse
+    Traverse -.->|extends| Feasibility
+    SetConstraints -.->|Constraints| Feasibility
+    SetConfig -.-> Feasibility
+
+    Feasibility -->|includes| IK
+    Feasibility --> Grabriella
+    IK --> Grabriella
+    ErrorHandling --> Grabriella</pre>
+  </div>
+
+  <div id="02-control" class="diagram-block">
+    <div class="diagram-title"><h2>2. Control flow: Robot + Control PC</h2></div>
+    <pre>flowchart LR
+  subgraph Robot["UR Robot Controller (or Gazebo sim)"]
+    direction TB
+    URD["ur_robot_driver / Gazebo"]
+    CTRL["joint_trajectory_controller"]
+  end
+
+  subgraph PC["Control PC / ROS2 VM"]
+    direction TB
+    Exec["ExecuteProgram\n(Pick, Place, constraints,\nfeasibility, error_handler)"]
+    move["move\n(/Move action server)"]
+    robmove["robmove\n(/Robmove action server)"]
+    robpose["robpose"]
+    MG["move_group (MoveIt2)"]
+    TF["robot_state_publisher + tf2"]
+  end
+
+  Exec -->|"/Move" action| move
+  Exec -->|"/Robmove" action| robmove
+  robpose -->|"/Robpose"| Exec
+  move --> MG
+  robmove --> MG
+  MG -->|joint trajectory| CTRL
+  URD -->|"/joint_states"| TF
+  URD -->|"/joint_states"| MG
+  URD -->|"/joint_states"| move
+  URD -->|"/joint_states"| robmove</pre>
+  </div>
+
+  <div id="03-component" class="diagram-block">
+    <div class="diagram-title"><h2>3. Component & package diagram</h2></div>
+    <pre>flowchart TB
+    subgraph User["User / Applications"]
+        YAML[Task programs .yaml]
+        ExecuteProgram[ExecuteProgram.py]
+        Hanoi[hanoi_tower_demo.py]
+    end
+
+    subgraph Execution["ros2srrc_execution"]
+        Pick[Pick / Place]
+        Constraints[ConstraintsHandler]
+        Config[ConfigurationHandler]
+        Error[ErrorHandler]
+        Feasibility[feasibility_check]
+        Spawn[SpawnObject / RemoveObject]
+        subgraph Grippers["Gripper clients"]
+            PG[ParallelGripper]
+            TwoFG7[OnRobot 2FG7]
+            Robotiq[Robotiq]
+        end
+        RBT[Robot client]
+    end
+
+    subgraph Motion["C++ motion nodes"]
+        move[move]
+        robmove[robmove]
+        robpose[robpose]
+    end
+
+    subgraph Data["ros2srrc_data"]
+        Actions[Move, Robmove, Sequence]
+        Msgs[Robpose, Xyzypr, Joints, ...]
+    end
+
+    subgraph MoveIt["ros2srrc_moveit"]
+        SRDF[SRDF, kinematics]
+    end
+
+    subgraph Sim["Simulation stack"]
+        Gazebo[Gazebo]
+        GZControl[gazebo_ros2_control]
+        LinkAttach[IFRA LinkAttacher]
+        ObjectPose[object_poses]
+    end
+
+    subgraph Real["Real robot stack"]
+        URDriver[ur_robot_driver]
+        TwoFG7HW[2FG7 hardware]
+    end
+
+    YAML --> ExecuteProgram
+    ExecuteProgram --> Pick
+    ExecuteProgram --> Constraints
+    ExecuteProgram --> Config
+    ExecuteProgram --> Error
+    Hanoi --> Pick
+    Pick --> RBT
+    Pick --> Grippers
+    RBT --> move
+    RBT --> robmove
+    robpose --> Msgs
+    move --> MoveIt
+    robmove --> MoveIt
+    RBT --> Msgs
+    Grippers --> LinkAttach
+    Grippers --> TwoFG7
+    move --> GZControl
+    move --> URDriver
+    robmove --> GZControl
+    robmove --> URDriver</pre>
+  </div>
+
+  <div id="04-dataflow" class="diagram-block">
+    <div class="diagram-title"><h2>4. Data flow: topics, actions, services</h2></div>
+    <pre>flowchart LR
+    subgraph Publishers
+        robpose_node[robpose node]
+        p3d[Gazebo p3d / objectpose]
+        scene[ConstraintsHandler / Spawn/Remove]
+    end
+
+    subgraph Topics
+        T_Robpose["/Robpose\n(geometry_msgs/PoseStamped)"]
+        T_ObjectPose["/object_poses/&lt;name&gt;\n(nav_msgs/Odometry)"]
+        T_Planning["/planning_scene"]
+    end
+
+    subgraph Actions
+        A_Move["/Move\n(ros2srrc_data)"]
+        A_Robmove["/Robmove\n(ros2srrc_data)"]
+    end
+
+    subgraph Services
+        S_Attach["/ATTACHLINK"]
+        S_Detach["/DETACHLINK"]
+        S_Robotiq["/RobotiqGripper (optional)"]
+    end
+
+    subgraph Consumers
+        PickPlace[Pick / Place]
+        PG[ParallelGripper]
+        VG[VacuumGripper]
+        Move[move node]
+        Robmove[robmove node]
+    end
+
+    robpose_node --> T_Robpose
+    p3d --> T_ObjectPose
+    scene --> T_Planning
+
+    T_Robpose --> PickPlace
+    T_Robpose --> PG
+    T_Robpose --> VG
+    T_ObjectPose --> PickPlace
+    T_ObjectPose --> PG
+
+    PickPlace --> A_Move
+    PickPlace --> A_Robmove
+    A_Move --> Move
+    A_Robmove --> Robmove
+
+    PG --> S_Attach
+    PG --> S_Detach
+    VG --> S_Attach
+    VG --> S_Detach</pre>
+  </div>
+
+  <div id="05-deployment" class="diagram-block">
+    <div class="diagram-title"><h2>5. Deployment: simulation vs real robot</h2></div>
+    <pre>flowchart TB
+    subgraph Sim["Simulation (moveit2.launch.py)"]
+        GZ[Gazebo]
+        GZCtrl[gazebo_ros2_control]
+        MoveIt[MoveIt 2]
+        move_s[move]
+        robmove_s[robmove]
+        robpose_s[robpose]
+        LinkAttach[LinkAttacher plugin]
+        PG[ParallelGripper / VacuumGripper]
+    end
+
+    subgraph Real["Real robot (bringup_ur.launch.py)"]
+        UR[ur_robot_driver]
+        MoveItR[MoveIt 2]
+        move_r[move]
+        robmove_r[robmove]
+        robpose_r[robpose]
+        TwoFG7[OnRobot 2FG7 client]
+    end
+
+    subgraph Common["Common (run separately)"]
+        Exec[ExecuteProgram / Hanoi]
+        Pick[Pick / Place]
+    end
+
+    GZ --> GZCtrl
+    GZ --> LinkAttach
+    GZCtrl --> move_s
+    GZCtrl --> robmove_s
+    MoveIt --> move_s
+    MoveIt --> robmove_s
+    robpose_s --> Robpose
+    PG --> LinkAttach
+    PG --> move_s
+
+    UR --> move_r
+    UR --> robmove_r
+    MoveItR --> move_r
+    MoveItR --> robmove_r
+    robpose_r --> Robpose
+    TwoFG7 --> Exec
+
+    Exec --> Pick
+    Pick --> move_s
+    Pick --> move_r
+    Pick --> PG
+    Pick --> TwoFG7</pre>
+  </div>
+
+  <div id="06-dispatch" class="diagram-block">
+    <div class="diagram-title"><h2>6. ExecuteProgram step dispatch</h2></div>
+    <pre>flowchart LR
+    YAML[program.yaml] --> Seq[Sequence]
+    Seq --> S1[SetConfiguration]
+    Seq --> S2[SetConstraints]
+    Seq --> S3[MoveJ / RobMove]
+    Seq --> S4[Pick]
+    Seq --> S5[Place]
+    Seq --> S6[ParallelGripper / 2FG7 / Robotiq]
+    Seq --> S7[Traverse]
+
+    S4 --> RBT[Robot client]
+    S4 --> GRIP[Gripper]
+    S5 --> RBT
+    S5 --> GRIP
+    S6 --> GRIP
+    S1 --> Config[ConfigurationHandler]
+    S2 --> Constraints[ConstraintsHandler]
+    S3 --> RBT
+    S7 --> RBT
+
+    RBT --> Move[/Move]
+    RBT --> Robmove[/Robmove]
+    GRIP --> Attach[/ATTACHLINK]
+    GRIP --> Detach[/DETACHLINK]
+    Constraints --> Planning[/planning_scene]</pre>
+  </div>
+
+  <div id="07-class" class="diagram-block">
+    <div class="diagram-title"><h2>7. Class diagram (execution layer)</h2></div>
+    <pre>classDiagram
+    direction TB
+    class "rclcpp::Node" { # node_options_ +get_logger() }
+    class "ros2srrc::ExecuteProgram" { - sequence_ +getSEQUENCE() +run() - dispatch() }
+    class "ros2srrc::ErrorHandler" { +interpret() +handle_step_result() }
+    class "ros2srrc::ConstraintsHandler" { +apply_constraints() }
+    class "ros2srrc::ConfigurationHandler" { - config_ +set_configuration() +get_configuration() }
+    class "ros2srrc::Pick" { - robot_ - gripper_ - config_ +execute() +execute_with_fallback() - _calculate_poses() }
+    class "ros2srrc::Place" { - robot_ - gripper_ - config_ +execute() - _calculate_poses() }
+    class "ros2srrc::RBT" { - move_client_ - robmove_client_ +Move_EXECUTE() +RobMove_EXECUTE() +CANCEL() }
+    class "ros2srrc::MoveCLIENT" { - action_client_ +send_goal() - goal_response_callback() }
+    class "ros2srrc::RobMoveCLIENT" { - action_client_ +send_goal() - goal_response_callback() }
+    class "ros2srrc::GripperInterface" { + open() + close() }
+    class "ros2srrc::OnRobot2FG7Backend" { - robot_ip_ + open() + close() }
+    class "ros2srrc::ParallelGripperAdapter" { - ee_link_ + open() + close() }
+    "ros2srrc::ExecuteProgram" ..> "ros2srrc::ErrorHandler"
+    "ros2srrc::ExecuteProgram" ..> "ros2srrc::ConstraintsHandler"
+    "ros2srrc::ExecuteProgram" ..> "ros2srrc::ConfigurationHandler"
+    "ros2srrc::ExecuteProgram" -- "ros2srrc::Pick"
+    "ros2srrc::ExecuteProgram" -- "ros2srrc::Place"
+    "ros2srrc::Pick" o-- "ros2srrc::RBT"
+    "ros2srrc::Pick" o-- "ros2srrc::GripperInterface"
+    "ros2srrc::Place" o-- "ros2srrc::RBT"
+    "ros2srrc::Place" o-- "ros2srrc::GripperInterface"
+    "rclcpp::Node" &lt;|-- "ros2srrc::MoveCLIENT"
+    "rclcpp::Node" &lt;|-- "ros2srrc::RobMoveCLIENT"
+    "ros2srrc::RBT" *-- "ros2srrc::MoveCLIENT"
+    "ros2srrc::RBT" *-- "ros2srrc::RobMoveCLIENT"
+    "ros2srrc::GripperInterface" &lt;|-- "ros2srrc::OnRobot2FG7Backend"
+    "ros2srrc::GripperInterface" &lt;|-- "ros2srrc::ParallelGripperAdapter"
+    "ros2srrc::ExecuteProgram" ..> "ros2srrc::GripperInterface"</pre>
+  </div>
+</body>
+</html>

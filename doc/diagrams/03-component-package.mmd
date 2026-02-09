@@ -1,0 +1,69 @@
+flowchart TB
+    subgraph User["User / Applications"]
+        YAML[Task programs .yaml]
+        ExecuteProgram[ExecuteProgram.py]
+        Hanoi[hanoi_tower_demo.py]
+    end
+
+    subgraph Execution["ros2srrc_execution"]
+        Pick[Pick / Place]
+        Constraints[ConstraintsHandler]
+        Config[ConfigurationHandler]
+        Error[ErrorHandler]
+        Feasibility[feasibility_check]
+        Spawn[SpawnObject / RemoveObject]
+        subgraph Grippers["Gripper clients"]
+            PG[ParallelGripper]
+            TwoFG7[OnRobot 2FG7]
+            Robotiq[Robotiq]
+        end
+        RBT[Robot client]
+    end
+
+    subgraph Motion["C++ motion nodes"]
+        move[move]
+        robmove[robmove]
+        robpose[robpose]
+    end
+
+    subgraph Data["ros2srrc_data"]
+        Actions[Move, Robmove, Sequence]
+        Msgs[Robpose, Xyzypr, Joints, ...]
+    end
+
+    subgraph MoveIt["ros2srrc_moveit"]
+        SRDF[SRDF, kinematics]
+    end
+
+    subgraph Sim["Simulation stack"]
+        Gazebo[Gazebo]
+        GZControl[gazebo_ros2_control]
+        LinkAttach[IFRA LinkAttacher]
+        ObjectPose[object_poses]
+    end
+
+    subgraph Real["Real robot stack"]
+        URDriver[ur_robot_driver]
+        TwoFG7HW[2FG7 hardware]
+    end
+
+    YAML --> ExecuteProgram
+    ExecuteProgram --> Pick
+    ExecuteProgram --> Constraints
+    ExecuteProgram --> Config
+    ExecuteProgram --> Error
+    Hanoi --> Pick
+    Pick --> RBT
+    Pick --> Grippers
+    RBT --> move
+    RBT --> robmove
+    robpose --> Msgs
+    move --> MoveIt
+    robmove --> MoveIt
+    RBT --> Msgs
+    Grippers --> LinkAttach
+    Grippers --> TwoFG7
+    move --> GZControl
+    move --> URDriver
+    robmove --> GZControl
+    robmove --> URDriver

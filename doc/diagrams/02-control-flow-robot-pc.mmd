@@ -1,0 +1,27 @@
+flowchart LR
+  subgraph Robot["UR Robot Controller (or Gazebo sim)"]
+    direction TB
+    URD["ur_robot_driver / Gazebo"]
+    CTRL["joint_trajectory_controller"]
+  end
+
+  subgraph PC["Control PC / ROS2 VM"]
+    direction TB
+    Exec["ExecuteProgram\n(Pick, Place, constraints,\nfeasibility, error_handler)"]
+    move["move\n(/Move action server)"]
+    robmove["robmove\n(/Robmove action server)"]
+    robpose["robpose"]
+    MG["move_group (MoveIt2)"]
+    TF["robot_state_publisher + tf2"]
+  end
+
+  Exec -->|"/Move" action| move
+  Exec -->|"/Robmove" action| robmove
+  robpose -->|"/Robpose"| Exec
+  move --> MG
+  robmove --> MG
+  MG -->|joint trajectory| CTRL
+  URD -->|"/joint_states"| TF
+  URD -->|"/joint_states"| MG
+  URD -->|"/joint_states"| move
+  URD -->|"/joint_states"| robmove

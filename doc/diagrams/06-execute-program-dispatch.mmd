@@ -1,0 +1,25 @@
+flowchart LR
+    YAML[program.yaml] --> Seq[Sequence]
+    Seq --> S1[SetConfiguration]
+    Seq --> S2[SetConstraints]
+    Seq --> S3[MoveJ RobMove]
+    Seq --> S4[Pick]
+    Seq --> S5[Place]
+    Seq --> S6[ParallelGripper 2FG7 Robotiq]
+    Seq --> S7[Traverse]
+
+    S4 --> RBT[Robot client]
+    S4 --> GRIP[Gripper]
+    S5 --> RBT
+    S5 --> GRIP
+    S6 --> GRIP
+    S1 --> Config[ConfigurationHandler]
+    S2 --> Constraints[ConstraintsHandler]
+    S3 --> RBT
+    S7 --> RBT
+
+    RBT --> MoveNode["/Move"]
+    RBT --> RobmoveNode["/Robmove"]
+    GRIP --> AttachNode["/ATTACHLINK"]
+    GRIP --> DetachNode["/DETACHLINK"]
+    Constraints --> PlanningNode["/planning_scene"]
