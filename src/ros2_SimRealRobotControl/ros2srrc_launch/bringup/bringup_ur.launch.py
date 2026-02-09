@@ -435,6 +435,9 @@ def generate_launch_description():
     #LD.add_action(joint_trajectory_controller_spawner)
     LD.add_action(scaled_joint_trajectory_controller_spawner)
 
+    # Robotiq server only for actual Robotiq end-effectors (HandE uses same service).
+    # Do not start Robotiq server for OnRobot 2FG7 (different protocol; 2FG7 uses URScript via TCP).
+    # TODO: If needed, launch a dedicated OnRobot/2FG7 driver node here when CONFIGURATION["ee"] == "robotiq_2fg7".
     if CONFIGURATION["ee"] == "robotiq_hande":
         LD.add_action(RobotiqServer)
 

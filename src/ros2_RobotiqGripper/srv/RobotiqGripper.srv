@@ -1,4 +1,5 @@
 string action
+int32 position
 ---
 bool success
 int64 value

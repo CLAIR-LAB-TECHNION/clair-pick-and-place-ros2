@@ -68,8 +68,8 @@
   </group_state>
 
   <group_state name="GripperOpen" group="robotiq_hande">
-    <joint name="robotiq_hande_left_finger_joint" value="0" />
-    <joint name="robotiq_hande_right_finger_joint" value="0" />
+    <joint name="robotiq_hande_left_finger_joint" value="0.05" />
+    <joint name="robotiq_hande_right_finger_joint" value="0.05" />
   </group_state>
 
   <group_state name="GripperCloseHALF" group="robotiq_hande">

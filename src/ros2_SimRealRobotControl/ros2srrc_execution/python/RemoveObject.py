@@ -180,8 +180,7 @@ def main():
     rclpy.init()
     remover = ObjectRemover()
     
-    # Give time for publishers/clients to connect
-    time.sleep(0.3)
+    time.sleep(0.15)  # Brief connect time
     
     success = True
     

@@ -110,9 +110,9 @@ def move_to_home():
 
 
 def pick_cube(object_name, cube_size, min_lift_height=None):
-    """Pick a cube using pick_auto.py (cube_size for gripper, optional min_lift_height)."""
+    """Pick a cube using pick.py (cube_size for gripper, optional min_lift_height)."""
     cmd = [
-        "ros2", "run", "ros2srrc_execution", "pick_auto.py",
+        "ros2", "run", "ros2srrc_execution", "pick.py",
         f"object:={object_name}",
         f"cube_size:={cube_size}"
     ]
@@ -122,9 +122,9 @@ def pick_cube(object_name, cube_size, min_lift_height=None):
 
 
 def place_cube(x, y, z_surface, object_name, cube_size):
-    """Place a cube using place_auto.py. z_surface = top of table or top of cube below."""
+    """Place a cube using place.py. z_surface = top of table or top of cube below."""
     cmd = [
-        "ros2", "run", "ros2srrc_execution", "place_auto.py",
+        "ros2", "run", "ros2srrc_execution", "place.py",
         f"x:={x}",
         f"y:={y}",
         f"z:={z_surface}",

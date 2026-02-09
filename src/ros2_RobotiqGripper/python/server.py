@@ -100,8 +100,11 @@ class serviceServer(Node):
                 return(response)
 
         if request.action == "CLOSE":
-            
-            SCKT.sendall(b'SET POS 255\n')
+            # Use request.position if in [1,255]; 0 or unset = backward compat (255)
+            pos = request.position
+            if pos <= 0 or pos > 255:
+                pos = 255
+            SCKT.sendall(f'SET POS {pos}\n'.encode())
             ignore = SCKT.recv(2**10)
             time.sleep(1.0)
             SCKT.sendall(b'GET POS\n')

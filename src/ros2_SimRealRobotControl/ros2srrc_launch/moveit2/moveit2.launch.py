@@ -6,7 +6,7 @@ import os, sys, xacro, yaml, re
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, RegisterEventHandler, TimerAction
+from launch.actions import IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable, TimerAction
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
@@ -127,6 +127,12 @@ def generate_launch_description():
     if CONFIGURATION["Success"] == False:
         print("")
         print("ERROR: config INPUT ARGUMENT has not been correctly defined. Please try again.")
+        YAML_PATH = PKG_PATH + "/config/configurations.yaml"
+        if os.path.exists(YAML_PATH):
+            with open(YAML_PATH, 'r') as YAML:
+                cYAML = yaml.safe_load(YAML)
+            ids = [x["ID"] for x in cYAML.get("Configurations", [])]
+            print("Valid config values for " + PACKAGE_NAME + ": " + ", ".join(ids))
         print("Closing... BYE!")
         exit()   
 
@@ -137,7 +143,16 @@ def generate_launch_description():
     print(CONFIGURATION["ID"] + " -> " + CONFIGURATION["Name"])
     print("")
     
-    # ***** GAZEBO ***** #   
+    # ***** GAZEBO ***** #
+    # Ensure Gazebo can find the link attacher plugin (for ATTACHLINK/DETACHLINK services).
+    try:
+        _linkattacher_share = get_package_share_directory('ros2_linkattacher')
+        _linkattacher_lib = os.path.join(os.path.dirname(_linkattacher_share), 'lib')
+        _gpp = os.environ.get('GAZEBO_PLUGIN_PATH', '')
+        _gazebo_plugin_path = _linkattacher_lib + ((':' + _gpp) if _gpp else '')
+        set_linkattacher_env = SetEnvironmentVariable(name='GAZEBO_PLUGIN_PATH', value=_gazebo_plugin_path)
+    except PackageNotFoundError:
+        set_linkattacher_env = None
     # DECLARE Gazebo WORLD file:
     world_gazebo = os.path.join(
         get_package_share_directory('ros2srrc_gazebo'),
@@ -400,6 +415,8 @@ def generate_launch_description():
     # ========== RETURN LAUNCH DESCRIPTION ========== #
 
     # Add ROS 2 Nodes to LaunchDescription() element:
+    if set_linkattacher_env is not None:
+        LD.add_action(set_linkattacher_env)
     LD.add_action(gazebo)
     LD.add_action(node_robot_state_publisher)
     LD.add_action(static_tf)

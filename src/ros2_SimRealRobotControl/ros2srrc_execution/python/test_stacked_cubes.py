@@ -93,18 +93,18 @@ def spawn_cube(name, x, y, z, color, size=0.05):
 
 
 def pick_cube(object_name):
-    """Pick a cube using pick_auto.py"""
+    """Pick a cube using pick.py"""
     cmd = [
-        "ros2", "run", "ros2srrc_execution", "pick_auto.py",
+        "ros2", "run", "ros2srrc_execution", "pick.py",
         f"object:={object_name}"
     ]
     return run_command(cmd, f"Picking {object_name}", timeout=60)
 
 
 def place_cube(x, y, z=0.50, object_name=None):
-    """Place a cube using place_auto.py"""
+    """Place a cube using place.py"""
     cmd = [
-        "ros2", "run", "ros2srrc_execution", "place_auto.py",
+        "ros2", "run", "ros2srrc_execution", "place.py",
         f"x:={x}",
         f"y:={y}",
         f"z:={z}"

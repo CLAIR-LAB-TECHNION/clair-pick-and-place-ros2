@@ -27,20 +27,29 @@ import os
 import time
 import subprocess
 import argparse
-import rclpy
-from rclpy.node import Node
-from nav_msgs.msg import Odometry
 from ament_index_python.packages import get_package_share_directory
 
 # Add path for imports
 sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 'python'))
 
 
+def _publish_cube_pose(name, x, y, z):
+    """Publish cube pose to /object_poses/<name> via subprocess (for pick on real robot)."""
+    from ament_index_python.packages import get_package_prefix
+    pkg_prefix = get_package_prefix("ros2srrc_execution")
+    script = os.path.join(pkg_prefix, "lib", "ros2srrc_execution", "hanoi_publish_pose.py")
+    cmd = ["python3", script, f"name:={name}", f"x:={x}", f"y:={y}", f"z:={z}"]
+    try:
+        subprocess.run(cmd, check=True, timeout=3, capture_output=True, env=os.environ.copy())
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f"[Hanoi]: WARNING - Failed to publish pose for {name}: {e}")
+
+
 class TowerOfHanoi:
     """Tower of Hanoi puzzle solver with robot manipulation"""
     
     def __init__(self, num_cubes, peg_positions, cube_size_base=0.04, cube_height_base=0.04, 
-                 table_z=0.25, table_height=0.50):
+                 table_z=0.25, table_height=0.50, robot=None, ee_link=None, ee_type=None):
         """
         Initialize Tower of Hanoi puzzle
         
@@ -51,12 +60,18 @@ class TowerOfHanoi:
             cube_height_base: Height of each cube (meters)
             table_z: Z position of table center (meters)
             table_height: Height of table (meters)
+            robot: Optional robot name for pick/place (e.g. ur5)
+            ee_link: Optional EE link name for ATTACHLINK (e.g. EE_robotiq_2f85 or EE_robotiq_hande)
+            ee_type: Optional end-effector type (e.g. ParallelGripper for sim, RobotiqHandE/UR for real)
         """
         self.num_cubes = num_cubes
         self.peg_positions = peg_positions  # [(x1, y1), (x2, y2), (x3, y3)]
         self.cube_size_base = cube_size_base
         self.cube_height_base = cube_height_base
         self.table_surface_z = table_z + (table_height / 2)  # Top of table
+        self.robot = robot
+        self.ee_link = ee_link
+        self.ee_type = ee_type
         
         # Track state: each peg is a list of cube indices (0 = smallest, num_cubes-1 = largest)
         self.pegs = [[], [], []]  # [peg0, peg1, peg2]
@@ -149,7 +164,7 @@ class TowerOfHanoi:
             
             # Add to peg state
             self.pegs[0].append(i)
-            time.sleep(1.0)  # Give time for object to settle
+            time.sleep(0.3)  # Brief settle after spawn
         
         print(f"\n✓ Initial state: {self.num_cubes} cubes on Peg 0")
         self._print_state()
@@ -186,7 +201,7 @@ class TowerOfHanoi:
         """
         Pick a cube by index with fallback kinematics
         
-        Uses pick_auto.py which has built-in fallback mechanisms:
+        Uses pick.py which has built-in fallback mechanisms:
         - Approach: PTP (fixed position/joint space) first
         - Descend: PTP (fixed position) first, with LIN fallback if PTP fails
         - Multiple orientation candidates if first attempt fails
@@ -220,7 +235,7 @@ class TowerOfHanoi:
         if from_peg is not None and from_stack_pos is not None:
             # Always have picked cube center Z and safety margin for lift height logic
             picked_cube_z_center = self.get_cube_z(from_peg, from_stack_pos, cube_index=cube_index)
-            safety_margin = 0.25  # 20cm safety margin for clearance
+            safety_margin = 0.05  # 20cm safety margin for clearance
             
             # Count how many cubes are above this one
             cubes_above = len(self.pegs[from_peg]) - (from_stack_pos + 1)
@@ -281,14 +296,26 @@ class TowerOfHanoi:
                 if absolute_lift_z > MAX_LIFT_ABSOLUTE_Z:
                     min_lift_height = MAX_LIFT_ABSOLUTE_Z - picked_cube_z_center
         
-        # Add a small delay to let physics settle
-        time.sleep(0.1)
+        time.sleep(0.05)  # Brief physics settle
+        
+        # Real robot with known poses: publish cube pose so pick can get it
+        if self.ee_type is not None and from_peg is not None and from_stack_pos is not None:
+            x, y = self.peg_positions[from_peg]
+            z = self.get_cube_z(from_peg, from_stack_pos, cube_index=cube_index)
+            _publish_cube_pose(cube_name, x, y, z)
+            time.sleep(0.2)  # Pose propagate to pick (transient_local)
         
         cmd = [
-            "ros2", "run", "ros2srrc_execution", "pick_auto.py",
+            "ros2", "run", "ros2srrc_execution", "pick.py",
             f"object:={cube_name}",
             f"cube_size:={cube_size}"  # Pass cube size for automatic gripper close % calculation
         ]
+        if self.robot is not None:
+            cmd.append(f"robot:={self.robot}")
+        if self.ee_link is not None:
+            cmd.append(f"ee_link:={self.ee_link}")
+        if self.ee_type is not None:
+            cmd.append(f"ee_type:={self.ee_type}")
         
         # Add min_lift_height if calculated
         if min_lift_height is not None:
@@ -303,7 +330,7 @@ class TowerOfHanoi:
         """
         Place a cube on a peg at a specific stack position
         
-        Uses place_auto.py which has built-in fallback mechanisms:
+        Uses place.py which has built-in fallback mechanisms:
         - Approach: PTP (fixed position/joint space) first
         - Descend: PTP first, with LIN fallback if PTP fails
         - Retract: LIN first, with PTP fallback if LIN fails
@@ -315,7 +342,7 @@ class TowerOfHanoi:
         
         # Calculate target surface Z: if stacking on another cube, use top surface of bottom cube
         # Otherwise use table surface
-        # Note: place_auto.py expects z to be the target surface, and will add place_z_offset
+        # Note: place.py expects z to be the target surface, and will add place_z_offset
         if stack_position == 0:
             # Placing on table
             target_surface_z = self.table_surface_z
@@ -328,26 +355,32 @@ class TowerOfHanoi:
             # Top surface = center + half height
             target_surface_z = z_below_center + (cube_below_height / 2.0)
         
-        # Pass target surface Z to place_auto.py - it will add place_z_offset (cube_size/2 + 0.001)
+        # Pass target surface Z to place.py - it will add place_z_offset (cube_size/2 + 0.001)
         # to get the final cube center position
         z = target_surface_z
         
-        # Calculate expected place_z_offset for logging (place_auto.py will calculate this)
-        # place_auto.py uses: cube_height/2 + 0.02m (gripper clearance)
-        gripper_clearance = 0.02  # 2cm clearance for gripper (matches place_auto.py)
+        # Calculate expected place_z_offset for logging (place.py will calculate this)
+        # place.py uses: cube_height/2 + 0.02m (gripper clearance)
+        gripper_clearance = 0.02  # 2cm clearance for gripper (matches place.py)
         expected_offset = (cube_size / 2.0) + gripper_clearance
         expected_cube_center_z = z + expected_offset
         # After opening, cube will be pushed down by gripper_clearance to settle on surface
         final_cube_center_z = z + (cube_size / 2.0)
         
         cmd = [
-            "ros2", "run", "ros2srrc_execution", "place_auto.py",
+            "ros2", "run", "ros2srrc_execution", "place.py",
             f"x:={x}",
             f"y:={y}",
             f"z:={z}",
             f"object:={cube_name}",
             f"cube_size:={cube_size}"  # Pass cube size for dynamic offset calculation
         ]
+        if self.robot is not None:
+            cmd.append(f"robot:={self.robot}")
+        if self.ee_link is not None:
+            cmd.append(f"ee_link:={self.ee_link}")
+        if self.ee_type is not None:
+            cmd.append(f"ee_type:={self.ee_type}")
         return self._run_command(cmd, f"Placing {cube_name} on Peg {peg_index} (target surface: {target_surface_z:.3f}m, initial cube center: {expected_cube_center_z:.3f}m, final cube center: {final_cube_center_z:.3f}m, size: {cube_size:.3f}m)", timeout=60)
     
     def _run_command(self, cmd, description, timeout=30):
@@ -425,9 +458,7 @@ class TowerOfHanoi:
         
         # Update state (add to destination peg)
         self.pegs[to_peg].append(cube_index)
-        
-        # Give time for object to settle
-        time.sleep(0.3)
+        time.sleep(0.15)  # Brief settle before next move
         
         self._print_state()
         return True
@@ -523,7 +554,7 @@ class TowerOfHanoi:
         print("="*60)
         if not self._move_to_home():
             print("WARNING: Could not move to home position, continuing anyway...")
-        time.sleep(0.3)  # Give time for robot to settle
+        time.sleep(0.15)  # Brief settle before moves
         
         # Now execute the moves
         all_successful = True
@@ -552,7 +583,7 @@ class TowerOfHanoi:
         print("="*60)
         if not self._move_to_home():
             print("WARNING: Could not return to home position.")
-        time.sleep(0.3)
+        time.sleep(0.15)
         
         return all_successful
 
@@ -589,11 +620,22 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Solve with 3 cubes (default)
+  # Solve with 3 cubes (default, simulation)
   python3 hanoi_tower_demo.py
   
   # Solve with 5 cubes
   python3 hanoi_tower_demo.py --num_cubes 5
+  
+  # When sim uses HandE gripper (fix ATTACHLINK "Failed to find link EE_robotiq_2f85")
+  python3 hanoi_tower_demo.py --ee_link EE_robotiq_hande
+  
+  # Real robot with Robotiq gripper
+  python3 hanoi_tower_demo.py --ee_type RobotiqHandE/UR --ee_link EE_robotiq_hande --robot ur5
+  
+  # Real robot: skip spawn, physical setup, known poses (no perception needed)
+  python3 hanoi_tower_demo.py --ee_type RobotiqHandE/UR --ee_link EE_robotiq_hande --skip_spawn \\
+    --table_z 0.25 --peg_spacing 0.20 --cube_size_base 0.05 --initial_state "0:0,1,2;1:;2:"
+  # Poses are computed from peg positions + stack state and published to /object_poses/<name>
   
   # Custom peg positions
   python3 hanoi_tower_demo.py --num_cubes 4 --peg_spacing 0.25
@@ -627,6 +669,12 @@ Examples:
                         help='DEPRECATED: Use --cube_height instead')
     parser.add_argument('--skip_spawn', action='store_true',
                         help='Skip spawning table and cubes (use existing setup)')
+    parser.add_argument('--robot', type=str, default=None,
+                        help='Robot name for pick/place (e.g. ur5). If not set, scripts use their default.')
+    parser.add_argument('--ee_type', type=str, default=None,
+                        help='End-effector type: ParallelGripper (sim), RobotiqHandE/UR or robotiq_2f85 (real Robotiq), onrobot_2fg7 (real OnRobot). Default: ParallelGripper.')
+    parser.add_argument('--ee_link', type=str, default=None,
+                        help='End-effector link name (e.g. EE_robotiq_2f85 or EE_robotiq_hande). Must match the link in your robot URDF.')
     parser.add_argument('--initial_state', type=str, default=None,
                         help='Resume from current state. Format: 0:4;1:;2:0,1,2,3 (peg_index:cube_indices per peg, semicolon-separated). Use with --skip_spawn. Example: after move 30 failed with Peg0=[cube_4], Peg1=[], Peg2=[cube_0..cube_3] use --initial_state "0:4;1:;2:0,1,2,3" for 5 cubes (cube index 4=smallest, 0=largest).')
     
@@ -671,7 +719,11 @@ Examples:
     print(f"\nConfiguration:")
     print(f"  Number of cubes: {num_cubes}")
     print(f"  Expected moves: {expected_moves}")
+    print(f"  EE type: {args.ee_type or 'ParallelGripper (default)'}")
+    print(f"  EE link: {args.ee_link or '(default)'}")
+    print(f"  Robot: {args.robot or '(default)'}")
     print(f"  Table position: ({args.table_x}, {args.table_y}, {args.table_z})")
+    print(f"  Peg spacing: {args.peg_spacing}m, cube size base: {cube_size_base}m")
     print(f"  Peg positions:")
     for i, (x, y) in enumerate(peg_positions):
         print(f"    Peg {i}: ({x:.3f}, {y:.3f})")
@@ -683,7 +735,7 @@ Examples:
         if not spawn_table(args.table_x, args.table_y, args.table_z):
             print("\n✗ FAILED: Could not spawn table")
             return 1
-        time.sleep(0.3)
+        time.sleep(0.2)
     
     # Initialize puzzle
     hanoi = TowerOfHanoi(
@@ -692,7 +744,10 @@ Examples:
         cube_size_base=cube_size_base,
         cube_height_base=cube_height,
         table_z=args.table_z,
-        table_height=0.50
+        table_height=0.50,
+        robot=args.robot,
+        ee_link=args.ee_link,
+        ee_type=args.ee_type
     )
     hanoi.total_moves = expected_moves
     
@@ -701,7 +756,7 @@ Examples:
         if not hanoi.spawn_initial_state():
             print("\n✗ FAILED: Could not spawn initial state")
             return 1
-        time.sleep(1.0)  # Give time for all objects to settle
+        time.sleep(0.5)  # Brief settle for all spawned objects
     elif args.initial_state:
         # Resume from current state: parse initial_state and set pegs
         # Format: 0:4;1:;2:0,1,2,3  (peg_index:comma-separated cube indices, semicolon between pegs)

@@ -1,7 +1,10 @@
-
+# Real UR5 + OnRobot 2FG7 gripper — use with bringup config ur5_4
+# Launch: ros2 launch ros2srrc_launch bringup.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
+# Run:   ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_2fg7
+#        (pass robot_ip for 2FG7 backend, e.g. --ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>)
 Specifications:
   Robot: "ur5"
-  EndEffector: "ParallelGripper"
+  EndEffector: "onrobot_2fg7"
   EELink: "EE_robotiq_2f85"
   Objects: ["cube1"]
 
@@ -14,7 +17,7 @@ Sequence:
     Delay: 0.5
     Input:
       joint1: 90.0
-      joint2: -89.0
+      joint2: -89.9
       joint3: 90.0
       joint4: -90.0
       joint5: -90.0
@@ -22,7 +25,7 @@ Sequence:
 
   - Step: 2
     Name: "Open gripper"
-    Type: "ParallelGripper"
+    Type: "onrobot_2fg7"
     Action: "OPEN"
     Delay: 0.5
 
@@ -40,32 +43,15 @@ Sequence:
       qw: 0.5
     Config:
       approach_height: 0.25
-      grasp_z_offset: 0.03
+      grasp_z_offset: -0.05
       approach_speed: 1.0
       descend_speed: 0.7
       lift_speed: 0.8
       gripper_value: 30.0
 
   - Step: 4
-    Name: "Move to place location"
-    Type: "RobMove"
-    Movement: "PTP"
-    Speed: 1.0
-    Delay: 0.5
-    Input:
-      x: -0.15
-      y: 0.48
-      z: 0.75
-      qx: -0.5
-      qy: 0.5
-      qz: 0.5
-      qw: 0.5
-
-  - Step: 5
-    Name: "Descend to place"
-    Type: "RobMove"
-    Movement: "LIN"
-    Speed: 0.7
+    Name: "Put down object at place location"
+    Type: "Place"
     Delay: 0.5
     Input:
       x: -0.15
@@ -75,36 +61,21 @@ Sequence:
       qy: 0.5
       qz: 0.5
       qw: 0.5
+    Config:
+      approach_height: 0.22
+      place_z_offset: 0.03
+      approach_speed: 1.0
+      descend_speed: 0.7
+      retract_speed: 0.8
 
-  - Step: 6
-    Name: "Open gripper - release object"
-    Type: "ParallelGripper"
-    Action: "OPEN"
-    Delay: 1.0
-
-  - Step: 7
-    Name: "Retract from place location"
-    Type: "RobMove"
-    Movement: "LIN"
-    Speed: 0.8
-    Delay: 0.5
-    Input:
-      x: -0.15
-      y: 0.48
-      z: 0.75
-      qx: -0.5
-      qy: 0.5
-      qz: 0.5
-      qw: 0.5
-
-  - Step: 8
+  - Step: 5
     Name: "Return to home"
     Type: "MoveJ"
     Speed: 1.0
     Delay: 0.0
     Input:
       joint1: 90.0
-      joint2: -89.0
+      joint2: -89.9
       joint3: 90.0
       joint4: -90.0
       joint5: -90.0

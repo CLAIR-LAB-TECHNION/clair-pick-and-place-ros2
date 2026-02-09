@@ -58,6 +58,7 @@ class RobMoveCLIENT(Node):
     def __init__(self):
 
         super().__init__('ros2srrc_RobMove_Client')
+        self.declare_parameter("robot_ip", "")  # optional; used by OnRobot 2FG7 backend fallback when -p robot_ip:=x
         self._action_client = ActionClient(self, Robmove, 'Robmove')
 
         print("[CLIENT - robot.py]: Initialising ROS2 /RobMove Action Client!")

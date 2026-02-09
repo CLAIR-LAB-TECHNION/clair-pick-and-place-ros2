@@ -1,467 +1,157 @@
 #!/usr/bin/python3
+
+"""
+pick.py - Automated Pick Action
+
+Automatically picks an object by name. All parameters are determined automatically:
+- Object pose is retrieved from /object_poses/<name> topic
+- Grasp parameters are automatically calculated based on object type
+- Gripper orientation is automatically determined
+- Fallback mechanism: Tries PTP (fixed kinematics) first, then different solutions if needed
+
+Usage:
+    ros2 run ros2srrc_execution pick.py object:=cube1
+    
+Optional arguments:
+    robot:=ur5                  Robot name (default: ur5)
+    ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)
+    ee_link:=EE_robotiq_2f85    End-effector link name (default: EE_robotiq_2f85)
+    approach_height:=0.22       Approach height in meters (default: 0.22, works for all cube sizes up to ~80mm)
+    grasp_z_offset:=0.04        Grasp Z offset (default: 0.04, works for all cube sizes up to ~80mm)
+    min_lift_height:=<value>    Minimum lift height above object in meters (default: None, uses approach_height)
+    cube_size:=<value>          Cube size/width in meters (if provided, calculates gripper close % automatically)
+    gripper_value:=50.0         Gripper close percentage (default: 50.0, ignored if cube_size provided)
+    gripper_open:=0.085         Gripper open distance in meters (default: 0.085 = 85mm for Robotiq 2F-85)
+    gripper_closed:=0.00        Gripper closed distance in meters (default: 0.00)
+    gripper_margin:=0.002       Squeeze margin in meters (default: 0.002 = 2mm)
+    fallback_enabled:=true      Enable fallback mechanism (default: true)
+    max_attempts:=12            Maximum fallback attempts (default: 12)
+    grasp_yaw_offset_deg:=<deg> Extra yaw (deg) applied to grasp orientation (default: 0 = same as YAML)
+    pose_only:=true             Wait for pose from /object_poses/<name> and exit (no robot/execute); validates pose path.
+    
+Fallback Behavior:
+    - Tries PTP (fixed/joint space kinematics) first for each candidate
+    - If PTP fails, tries LIN (linear Cartesian) as fallback
+    - Tries different orientations (yaw angles) if first attempt fails
+    - Tries different approach heights and grasp offsets
+    - Up to 12 different solution attempts before giving up
+"""
+
 import sys
 import os
 import time
-import math
 import rclpy
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from ros2srrc_data.msg import Robpose
+from nav_msgs.msg import Odometry
+
+# Import the Pick class and yaw helper from pick_manual.py
+sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 'python'))
+from pick_manual import Pick, PickConfig, _quat_rotate_yaw_deg
 
 
-def _quat_rotate_yaw_deg(qx, qy, qz, qw, deg):
-    """
-    Apply additional yaw rotation about world Z to a quaternion (qx, qy, qz, qw).
-    Returns normalized (qx, qy, qz, qw).
-    """
-    half = math.radians(deg) * 0.5
-    cz, sz = math.cos(half), math.sin(half)
-    # q_z * q_obj (world Z then object; quat mult w=ab-cd-ed-fg, x=ac+bd+eg-fh, ...)
-    nw = cz * qw - sz * qz
-    nx = cz * qx - sz * qy
-    ny = cz * qy + sz * qx
-    nz = cz * qz + sz * qw
-    n = math.sqrt(nw * nw + nx * nx + ny * ny + nz * nz)
-    if n < 1e-12:
-        return (qx, qy, qz, qw)
-    return (nx / n, ny / n, nz / n, nw / n)
-
-
-class PickConfig:
-    """Configuration parameters for the Pick action."""
+class ObjectPoseGetter(Node):
+    """Get object pose from /object_poses/<name> topic"""
     
-    def __init__(self, config_dict=None):
-        """
-        Initialize Pick configuration with defaults or from a dictionary.
+    def __init__(self, object_name):
+        super().__init__('object_pose_getter')
+        self.object_name = object_name
+        self.pose_received = False
+        self.object_pose = None
         
-        Args:
-            config_dict: Optional dictionary with configuration overrides
-        """
-        # Default configuration values
-        self.approach_height = 0.22      # Z offset above object for approach pose (meters; 0.22 works for all cube sizes up to ~80mm)
-        self.grasp_z_offset = 0.04       # Z offset for grasp pose relative to object (meters)
-        self.approach_speed = 1.0        # Speed for PTP approach move (0.0-1.0)
-        self.descend_speed = 0.5         # Speed for LIN descend move (0.0-1.0)
-        self.lift_speed = 0.6            # Speed for LIN lift move (0.0-1.0)
-        self.gripper_value = 50.0        # Gripper close percentage (0-100)
-        self.min_lift_height = None      # Minimum lift height above object (meters, None = use approach_height)
-        
-        # Fallback candidates
-        self.fallback_enabled = True
-        self.max_attempts = 12
-        self.yaw_candidates_deg = [0.0, 30.0, -30.0, 60.0, -60.0, 90.0]
-        self.approach_height_candidates = [0.22, 0.20, 0.18]
-        self.grasp_z_offset_candidates = [0.04, 0.03, 0.02]
-        self.prefer_lin_descend = False  # Changed: Try PTP (fixed position) first, then LIN fallback
-        
-        # Override defaults with provided config
-        if config_dict:
-            if "approach_height" in config_dict:
-                self.approach_height = float(config_dict["approach_height"])
-            if "grasp_z_offset" in config_dict:
-                self.grasp_z_offset = float(config_dict["grasp_z_offset"])
-            if "approach_speed" in config_dict:
-                self.approach_speed = float(config_dict["approach_speed"])
-            if "descend_speed" in config_dict:
-                self.descend_speed = float(config_dict["descend_speed"])
-            if "lift_speed" in config_dict:
-                self.lift_speed = float(config_dict["lift_speed"])
-            if "gripper_value" in config_dict:
-                self.gripper_value = float(config_dict["gripper_value"])
-            if "fallback_enabled" in config_dict:
-                self.fallback_enabled = bool(config_dict["fallback_enabled"])
-            if "max_attempts" in config_dict:
-                self.max_attempts = int(config_dict["max_attempts"])
-            if "yaw_candidates_deg" in config_dict:
-                self.yaw_candidates_deg = [float(v) for v in config_dict["yaw_candidates_deg"]]
-            if "approach_height_candidates" in config_dict:
-                self.approach_height_candidates = [float(v) for v in config_dict["approach_height_candidates"]]
-            if "grasp_z_offset_candidates" in config_dict:
-                self.grasp_z_offset_candidates = [float(v) for v in config_dict["grasp_z_offset_candidates"]]
-            if "prefer_lin_descend" in config_dict:
-                self.prefer_lin_descend = bool(config_dict["prefer_lin_descend"])
-            if "min_lift_height" in config_dict:
-                val = config_dict["min_lift_height"]
-                self.min_lift_height = float(val) if val is not None else None
-
-
-class Pick:
-    """
-    High-level Pick action that encapsulates the full pick sequence.
-    
-    The Pick action performs:
-    1. Move to approach pose (PTP movement above the object)
-    2. Descend to grasp pose (LIN movement down to grasp position)
-    3. Close gripper (grasp the object)
-    4. Lift object (LIN movement back up to approach height)
-    """
-    
-    def __init__(self, robot_client, gripper_client, config=None):
-        """
-        Initialize the Pick action.
-        
-        Args:
-            robot_client: RBT instance for robot movements
-            gripper_client: parallelGR or vacuumGR instance for gripper control
-            config: Optional PickConfig or dict with configuration parameters
-        """
-        self.robot_client = robot_client
-        self.gripper_client = gripper_client
-        
-        # Handle config initialization
-        if config is None:
-            self.config = PickConfig()
-        elif isinstance(config, dict):
-            self.config = PickConfig(config)
-        else:
-            self.config = config
-    
-    def _calculate_poses(self, object_pose, approach_height=None, grasp_z_offset=None, quat_override=None):
-        """
-        Calculate approach, grasp, and lift poses from object pose.
-        
-        Args:
-            object_pose: Robpose message with object position (orientation is IGNORED - always uses fixed top-down)
-            approach_height: optional override (meters)
-            grasp_z_offset: optional override (meters)
-            quat_override: optional (qx, qy, qz, qw) for orientation; if None, uses fixed top-down orientation
-            
-        Returns:
-            tuple: (approach_pose, grasp_pose, lift_pose) as Robpose messages
-        """
-        ah = approach_height if approach_height is not None else self.config.approach_height
-        gz = grasp_z_offset if grasp_z_offset is not None else self.config.grasp_z_offset
-        if quat_override is not None:
-            qx, qy, qz, qw = quat_override
-        else:
-            # Always use fixed top-down orientation, ignore object_pose orientation (may be diagonal)
-            # This ensures consistent parallel grasps regardless of cube's rotation in Gazebo
-            qx, qy, qz, qw = -0.5, 0.5, 0.5, 0.5  # Fixed top-down orientation
-
-        # Approach pose: above the object
-        approach_pose = Robpose()
-        approach_pose.x = object_pose.x
-        approach_pose.y = object_pose.y
-        approach_pose.z = object_pose.z + ah
-        approach_pose.qx, approach_pose.qy, approach_pose.qz, approach_pose.qw = qx, qy, qz, qw
-
-        # Grasp pose: at grasp height (slightly above object center)
-        grasp_pose = Robpose()
-        grasp_pose.x = object_pose.x
-        grasp_pose.y = object_pose.y
-        grasp_pose.z = object_pose.z + gz
-        grasp_pose.qx, grasp_pose.qy, grasp_pose.qz, grasp_pose.qw = qx, qy, qz, qw
-
-        # Lift pose: use min_lift_height if specified, otherwise use approach_height
-        # This ensures we lift high enough to clear obstacles above the object
-        lift_height = self.config.min_lift_height if self.config.min_lift_height is not None else ah
-        # Ensure lift height is at least as high as approach height
-        lift_height = max(lift_height, ah)
-        
-        # Debug output for lift height calculation
-        if self.config.min_lift_height is not None:
-            print(f"[Pick]: Using min_lift_height: {self.config.min_lift_height:.3f}m (requested)")
-            print(f"[Pick]: Approach height: {ah:.3f}m")
-            print(f"[Pick]: Final lift height: {lift_height:.3f}m (relative to object center at z={object_pose.z:.3f}m)")
-            print(f"[Pick]: Absolute lift Z position: {object_pose.z + lift_height:.3f}m")
-        
-        lift_pose = Robpose()
-        lift_pose.x = object_pose.x
-        lift_pose.y = object_pose.y
-        lift_pose.z = object_pose.z + lift_height
-        lift_pose.qx, lift_pose.qy, lift_pose.qz, lift_pose.qw = qx, qy, qz, qw
-
-        return approach_pose, grasp_pose, lift_pose
-
-    def _build_candidates(self, object_pose):
-        """Build ordered list of fallback candidates (type_str, approach_height, grasp_z_offset, quat)."""
-        ah = self.config.approach_height
-        gz = self.config.grasp_z_offset
-        # CRITICAL: Always use fixed top-down orientation for grasping, IGNORING object's current orientation
-        # This ensures consistent, parallel grasps even if cube is rotated/diagonal in Gazebo
-        # Fixed orientation: -0.5, 0.5, 0.5, 0.5 (top-down, parallel to table) - same as pick_auto.py
-        # DO NOT use object_pose.qx/qy/qz/qw as it may contain diagonal orientation from Gazebo
-        q = (-0.5, 0.5, 0.5, 0.5)  # Fixed top-down orientation
-        yaws = self.config.yaw_candidates_deg
-        ah_list = sorted(self.config.approach_height_candidates, reverse=True)
-        gz_list = self.config.grasp_z_offset_candidates
-        out = []
-
-        # A) PRIMARY
-        out.append({"type_str": "PRIMARY", "approach_height": ah, "grasp_z_offset": gz, "quat": q})
-
-        # B) Same orient, alternative approach heights (higher first)
-        for h in ah_list:
-            if abs(h - ah) < 1e-6:
-                continue
-            out.append({"type_str": f"H={h:.2f}", "approach_height": h, "grasp_z_offset": gz, "quat": q})
-
-        # C) Same heights, yaw candidates (exclude 0)
-        for yaw in yaws:
-            if abs(yaw) < 1e-6:
-                continue
-            qyaw = _quat_rotate_yaw_deg(*q, yaw)
-            out.append({"type_str": f"YAW={int(yaw)}", "approach_height": ah, "grasp_z_offset": gz, "quat": qyaw})
-
-        # D) Yaw + higher approach
-        for yaw in yaws:
-            if abs(yaw) < 1e-6:
-                continue
-            qyaw = _quat_rotate_yaw_deg(*q, yaw)
-            for h in ah_list:
-                if h <= ah + 1e-6:
-                    continue
-                out.append({"type_str": f"H={h:.2f}|YAW={int(yaw)}", "approach_height": h, "grasp_z_offset": gz, "quat": qyaw})
-
-        # E) Vary grasp_z_offset (primary orient, primary height)
-        for zoff in gz_list:
-            if abs(zoff - gz) < 1e-6:
-                continue
-            out.append({"type_str": f"ZOFF={zoff:.2f}", "approach_height": ah, "grasp_z_offset": zoff, "quat": q})
-
-        return out
-
-    def execute_with_fallback(self, object_pose):
-        """
-        Execute pick with fallback candidates. Try each candidate (approach + descend);
-        on first success, run grasp + lift and return. Stop after max_attempts.
-        """
-        T_start = time.time()
-        RES = {"Success": False, "Message": "", "ExecTime": -1.0}
-
-        print("[Pick]: Starting PICK sequence (fallback enabled)...")
-        print(f"[Pick]: Object pose -> x: {object_pose.x:.3f}, y: {object_pose.y:.3f}, z: {object_pose.z:.3f}")
-        print(f"[Pick]: Orientation -> qx: {object_pose.qx:.3f}, qy: {object_pose.qy:.3f}, qz: {object_pose.qz:.3f}, qw: {object_pose.qw:.3f}")
-        print("")
-
-        candidates = self._build_candidates(object_pose)[: self.config.max_attempts]
-        N = len(candidates)
-
-        for i, c in enumerate(candidates):
-            attempt = i + 1
-            approach_pose, grasp_pose, lift_pose = self._calculate_poses(
-                object_pose,
-                approach_height=c["approach_height"],
-                grasp_z_offset=c["grasp_z_offset"],
-                quat_override=c["quat"],
-            )
-
-            # Step 1: PTP to approach
-            approach_result = self.robot_client.RobMove_EXECUTE("PTP", self.config.approach_speed, approach_pose)
-            if not approach_result["Success"]:
-                print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] Step 1 (Approach) failed: {approach_result['Message']}")
-                continue
-
-            # Step 2: Descend (PTP first - fixed position, then LIN fallback)
-            # Try PTP (joint space/fixed position) first as it's more reliable
-            descend_result = self.robot_client.RobMove_EXECUTE("PTP", self.config.descend_speed, grasp_pose)
-            if not descend_result["Success"]:
-                # Fallback to LIN if PTP fails
-                print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] PTP descend failed, trying LIN fallback...")
-                descend_result = self.robot_client.RobMove_EXECUTE("LIN", self.config.descend_speed, grasp_pose)
-            
-            if not descend_result["Success"]:
-                print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] Step 2 (Descend) failed: {descend_result['Message']}")
-                continue
-
-            print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] Reached grasp, executing grasp+lift...")
-            print("")
-
-            # Step 3: Close gripper
-            print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {self.config.gripper_value}%)...")
-            if self.gripper_client is not None:
-                if hasattr(self.gripper_client, "CLOSE"):
-                    grasp_result = self.gripper_client.CLOSE(self.config.gripper_value)
-                elif hasattr(self.gripper_client, "ACTIVATE"):
-                    grasp_result = self.gripper_client.ACTIVATE()
-                else:
-                    RES["Message"] = "Pick FAILED at Step 3 (Grasp): Unknown gripper type"
-                    T_end = time.time()
-                    RES["ExecTime"] = round(T_end - T_start, 4)
-                    return RES
-                if not grasp_result["Success"]:
-                    RES["Message"] = f"Pick FAILED at Step 3 (Grasp): {grasp_result['Message']}"
-                    T_end = time.time()
-                    RES["ExecTime"] = round(T_end - T_start, 4)
-                    return RES
-            else:
-                print("[Pick]: WARNING - No gripper client provided, skipping grasp step.")
-            print("[Pick]: Step 3/4 - Gripper closed successfully.")
-            print("")
-
-            # Step 4: Lift
-            print(f"[Pick]: Step 4/4 - LIFTING object (LIN) to pose: x={lift_pose.x:.3f}, y={lift_pose.y:.3f}, z={lift_pose.z:.3f}")
-            lift_result = self.robot_client.RobMove_EXECUTE("LIN", self.config.lift_speed, lift_pose)
-            if not lift_result["Success"]:
-                print(f"[Pick]: LIFT FAILED - Full result: Success={lift_result.get('Success')}, Message={lift_result.get('Message')}, ExecTime={lift_result.get('ExecTime')}")
-                print(f"[Pick]: Target lift pose was: x={lift_pose.x:.3f}, y={lift_pose.y:.3f}, z={lift_pose.z:.3f}")
-                RES["Message"] = f"Pick FAILED at Step 4 (Lift): {lift_result['Message']}"
-                T_end = time.time()
-                RES["ExecTime"] = round(T_end - T_start, 4)
-                return RES
-            print("[Pick]: Step 4/4 - Object lifted successfully.")
-            print("")
-
-            T_end = time.time()
-            RES["Success"] = True
-            RES["Message"] = "Pick sequence completed successfully."
-            RES["ExecTime"] = round(T_end - T_start, 4)
-            print(f"[Pick]: PICK SEQUENCE COMPLETE. Total time: {RES['ExecTime']}s")
-            print("")
-            return RES
-
-        RES["Message"] = f"Pick FAILED: all {N} candidates failed."
-        RES["ExecTime"] = round(time.time() - T_start, 4)
-        print(f"[Pick]: {RES['Message']}")
-        return RES
-
-    def execute(self, object_pose):
-        """
-        Execute the full pick sequence.
-        
-        Args:
-            object_pose: Robpose message with object position and gripper orientation
-                        (x, y, z position of object; qx, qy, qz, qw for gripper orientation)
-        
-        Returns:
-            dict: Result with keys:
-                - "Success": bool indicating if pick was successful
-                - "Message": str with result description
-                - "ExecTime": float with total execution time in seconds
-        """
-        if self.config.fallback_enabled:
-            return self.execute_with_fallback(object_pose)
-
-        T_start = time.time()
-        
-        # Initialize result
-        RES = {
-            "Success": False,
-            "Message": "",
-            "ExecTime": -1.0
-        }
-        
-        print("[Pick]: Starting PICK sequence...")
-        print(f"[Pick]: Object pose -> x: {object_pose.x:.3f}, y: {object_pose.y:.3f}, z: {object_pose.z:.3f}")
-        print(f"[Pick]: Orientation -> qx: {object_pose.qx:.3f}, qy: {object_pose.qy:.3f}, qz: {object_pose.qz:.3f}, qw: {object_pose.qw:.3f}")
-        print("")
-        
-        # Calculate all poses
-        approach_pose, grasp_pose, lift_pose = self._calculate_poses(object_pose)
-        
-        print(f"[Pick]: Approach height: {self.config.approach_height}m")
-        print(f"[Pick]: Grasp Z offset: {self.config.grasp_z_offset}m")
-        print("")
-        
-        # ===== STEP 1: Move to approach pose (PTP) ===== #
-        print("[Pick]: Step 1/4 - Moving to APPROACH pose (PTP)...")
-        approach_result = self.robot_client.RobMove_EXECUTE(
-            "PTP",
-            self.config.approach_speed,
-            approach_pose
+        # Subscribe to object pose topic
+        topic_name = f"/object_poses/{object_name}"
+        self.subscription = self.create_subscription(
+            Odometry,
+            topic_name,
+            self.pose_callback,
+            10
         )
-        
-        if not approach_result["Success"]:
-            RES["Message"] = f"Pick FAILED at Step 1 (Approach): {approach_result['Message']}"
-            print(f"[Pick]: {RES['Message']}")
-            T_end = time.time()
-            RES["ExecTime"] = round(T_end - T_start, 4)
-            return RES
-        
-        print("[Pick]: Step 1/4 - Approach pose reached successfully.")
-        print("")
-        
-        # ===== STEP 2: Descend to grasp pose (PTP first, then LIN fallback) ===== #
-        print("[Pick]: Step 2/4 - Descending to GRASP pose (PTP - fixed position first)...")
-        descend_result = self.robot_client.RobMove_EXECUTE(
-            "PTP",
-            self.config.descend_speed,
-            grasp_pose
-        )
-        
-        # If PTP fails, try LIN as fallback
-        if not descend_result["Success"]:
-            print("[Pick]: PTP descent failed, trying LIN as fallback...")
-            descend_result = self.robot_client.RobMove_EXECUTE(
-                "LIN",
-                self.config.descend_speed,
-                grasp_pose
-            )
-        
-        if not descend_result["Success"]:
-            RES["Message"] = f"Pick FAILED at Step 2 (Descend): {descend_result['Message']}"
-            print(f"[Pick]: {RES['Message']}")
-            T_end = time.time()
-            RES["ExecTime"] = round(T_end - T_start, 4)
-            return RES
-        
-        print("[Pick]: Step 2/4 - Grasp pose reached successfully.")
-        print("")
-        
-        # ===== STEP 3: Close gripper ===== #
-        print(f"[Pick]: Step 3/4 - Closing GRIPPER (value: {self.config.gripper_value}%)...")
-        
-        if self.gripper_client is not None:
-            # Check if it's a parallel gripper (has CLOSE method with value)
-            if hasattr(self.gripper_client, 'CLOSE'):
-                grasp_result = self.gripper_client.CLOSE(self.config.gripper_value)
-            # Check if it's a vacuum gripper (has ACTIVATE method)
-            elif hasattr(self.gripper_client, 'ACTIVATE'):
-                grasp_result = self.gripper_client.ACTIVATE()
-            else:
-                RES["Message"] = "Pick FAILED at Step 3 (Grasp): Unknown gripper type"
-                print(f"[Pick]: {RES['Message']}")
-                T_end = time.time()
-                RES["ExecTime"] = round(T_end - T_start, 4)
-                return RES
-            
-            if not grasp_result["Success"]:
-                RES["Message"] = f"Pick FAILED at Step 3 (Grasp): {grasp_result['Message']}"
-                print(f"[Pick]: {RES['Message']}")
-                T_end = time.time()
-                RES["ExecTime"] = round(T_end - T_start, 4)
-                return RES
-        else:
-            print("[Pick]: WARNING - No gripper client provided, skipping grasp step.")
-        
-        print("[Pick]: Step 3/4 - Gripper closed successfully.")
-        print("")
-        
-        # ===== STEP 4: Lift object (LIN) ===== #
-        print(f"[Pick]: Step 4/4 - LIFTING object (LIN) to pose: x={lift_pose.x:.3f}, y={lift_pose.y:.3f}, z={lift_pose.z:.3f}")
-        lift_result = self.robot_client.RobMove_EXECUTE(
-            "LIN",
-            self.config.lift_speed,
-            lift_pose
-        )
-        
-        if not lift_result["Success"]:
-            print(f"[Pick]: LIFT FAILED - Full result: Success={lift_result.get('Success')}, Message={lift_result.get('Message')}, ExecTime={lift_result.get('ExecTime')}")
-            print(f"[Pick]: Target lift pose was: x={lift_pose.x:.3f}, y={lift_pose.y:.3f}, z={lift_pose.z:.3f}")
-            RES["Message"] = f"Pick FAILED at Step 4 (Lift): {lift_result['Message']}"
-            print(f"[Pick]: {RES['Message']}")
-            T_end = time.time()
-            RES["ExecTime"] = round(T_end - T_start, 4)
-            return RES
-        
-        print("[Pick]: Step 4/4 - Object lifted successfully.")
-        print("")
-        
-        # ===== SUCCESS ===== #
-        T_end = time.time()
-        RES["Success"] = True
-        RES["Message"] = "Pick sequence completed successfully."
-        RES["ExecTime"] = round(T_end - T_start, 4)
-        
-        print(f"[Pick]: PICK SEQUENCE COMPLETE. Total time: {RES['ExecTime']}s")
-        print("")
-        
-        return RES
+        self.get_logger().info(f'Subscribed to {topic_name}')
+    
+    def pose_callback(self, msg):
+        """Callback when object pose is received. Pose must be in MoveIt planning frame (world for UR5)."""
+        if not self.pose_received:
+            frame = msg.header.frame_id if msg.header.frame_id else "unknown"
+            if frame != "world":
+                self.get_logger().warn(
+                    f'Pose frame_id is "{frame}" but MoveIt expects "world". '
+                    "Robot may move to wrong location! Fix the publisher (e.g. hanoi_publish_pose / hanoi_pose_publisher) to use frame_id=\"world\"."
+                )
+            self.object_pose = Robpose()
+            self.object_pose.x = msg.pose.pose.position.x
+            self.object_pose.y = msg.pose.pose.position.y
+            self.object_pose.z = msg.pose.pose.position.z
+            self.object_pose.qx = msg.pose.pose.orientation.x
+            self.object_pose.qy = msg.pose.pose.orientation.y
+            self.object_pose.qz = msg.pose.pose.orientation.z
+            self.object_pose.qw = msg.pose.pose.orientation.w
+            self.pose_received = True
+            self.get_logger().info(f'Received pose for {self.object_name} (frame={frame}): x={self.object_pose.x:.3f}, y={self.object_pose.y:.3f}, z={self.object_pose.z:.3f}')
+    
+    def get_pose(self, timeout=5.0):
+        """Wait for pose with timeout"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.pose_received:
+                return self.object_pose
+        return None
 
 
-# ========================================================================================= #
-# ========================================= MAIN ========================================== #
-# ========================================================================================= #
+def calculate_grasp_orientation(object_x, object_y, object_z, robot_base_x=0.0, robot_base_y=0.0, robot_base_z=0.0):
+    """
+    Calculate a good gripper orientation for grasping an object.
+
+    FOR NOW, THIS IS A FIXED ORIENTATION THAT WORKS FOR UR5 + PARALLEL GRIPPER.
+    
+    Returns:
+        quaternion (qx, qy, qz, qw) suitable for grasping
+    """
+    # Use proven fixed orientation that works for UR5 + parallel gripper
+    # This is the same orientation used in the working YAML examples (ur5_pick_and_place.yaml)
+    # It represents a good top-down grasping pose that is reachable for most positions
+    return -0.5, 0.5, 0.5, 0.5
+
+
+def calculate_gripper_close_percentage(cube_width, g_open=0.085, g_closed=0.00, margin=0.002, p_min=0.0, p_max=100.0):
+    """
+    Calculate the gripper close percentage based on cube width using geometry.
+    
+    For a parallel gripper, what matters is the cube width (the dimension between the fingers).
+    
+    Formula:
+        w_eff = w - margin  (effective width with squeeze margin)
+        p = 100 * ((g_open - w_eff) / (g_open - g_closed))
+        p = max(p_min, min(p, p_max))  (clamp to valid range)
+    
+    Args:
+        cube_width: Cube width in meters (dimension between fingers)
+        g_open: Inner distance between fingers when fully open (meters, default: 0.085 for Robotiq 2F-85 = 85mm)
+        g_closed: Inner distance when "100% closed" (meters, default: 0.00)
+        margin: Squeeze margin in meters to ensure grip (default: 0.002 = 2mm)
+        p_min: Minimum close percentage (default: 0.0)
+        p_max: Maximum close percentage (default: 100.0)
+    
+    Returns:
+        Close percentage (0-100) to use for gripper
+    """
+    # Apply squeeze margin
+    w_eff = cube_width - margin
+    
+    # Calculate percentage
+    if g_open == g_closed:
+        # Avoid division by zero - if open and closed are the same, return max
+        return p_max
+    
+    p = 100.0 * ((g_open - w_eff) / (g_open - g_closed))
+    
+    # Clamp to valid range
+    p = max(p_min, min(p, p_max))
+    
+    return p
+
 
 def AssignArgument(ARGUMENT):
     """Parse command-line arguments in ROS2 style (arg:=value)."""
@@ -475,69 +165,41 @@ def AssignArgument(ARGUMENT):
 
 def main(args=None):
     """
-    Command-line interface for Pick action.
-    
-    Usage:
-        ros2 run ros2srrc_execution pick.py x:=0.15 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
-    
-    Optional arguments:
-        robot:=ur5                  Robot name (default: ur5)
-        ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)
-        ee_link:=EE_robotiq_2f85    End-effector link name (default: EE_robotiq_2f85)
-        objects:=cube1              Comma-separated object names (default: cube1)
-        approach_height:=0.15       Approach height in meters (default: 0.15)
-        grasp_z_offset:=0.03        Grasp Z offset in meters (default: 0.03)
-        gripper_value:=50.0         Gripper close percentage (default: 50.0)
+    Automated Pick action - only requires object name.
     """
     
     rclpy.init(args=args)
     
     print("==================================================")
-    print("ROS 2 Sim-to-Real Robot Control: Pick Action")
+    print("ROS 2 Sim-to-Real Robot Control: Automated Pick")
     print("==================================================")
     print("")
     
-    # ===== PARSE REQUIRED ARGUMENTS ===== #
-    x = AssignArgument("x")
-    y = AssignArgument("y")
-    z = AssignArgument("z")
-    qx = AssignArgument("qx")
-    qy = AssignArgument("qy")
-    qz = AssignArgument("qz")
-    qw = AssignArgument("qw")
+    # ===== PARSE REQUIRED ARGUMENT ===== #
+    object_name = AssignArgument("object")
     
-    # Check required arguments
-    missing_args = []
-    if x is None: missing_args.append("x")
-    if y is None: missing_args.append("y")
-    if z is None: missing_args.append("z")
-    if qx is None: missing_args.append("qx")
-    if qy is None: missing_args.append("qy")
-    if qz is None: missing_args.append("qz")
-    if qw is None: missing_args.append("qw")
-    
-    if missing_args:
-        print("ERROR: Missing required arguments: " + ", ".join(missing_args))
+    if object_name is None:
+        print("ERROR: Missing required argument: object")
         print("")
-        print("Usage: ros2 run ros2srrc_execution pick.py x:=<val> y:=<val> z:=<val> qx:=<val> qy:=<val> qz:=<val> qw:=<val>")
+        print("Usage: ros2 run ros2srrc_execution pick.py object:=<object_name>")
         print("")
         print("Example:")
-        print("  ros2 run ros2srrc_execution pick.py x:=0.15 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5")
+        print("  ros2 run ros2srrc_execution pick.py object:=cube1")
         print("")
         print("Optional arguments:")
         print("  robot:=ur5                  Robot name (default: ur5)")
         print("  ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)")
         print("  ee_link:=EE_robotiq_2f85    End-effector link (default: EE_robotiq_2f85)")
-        print("  objects:=cube1              Comma-separated object names (default: cube1)")
-        print("  approach_height:=0.15       Approach height in meters (default: 0.15)")
-        print("  grasp_z_offset:=0.03        Grasp Z offset in meters (default: 0.03)")
-        print("  gripper_value:=50.0         Gripper close percentage (default: 50.0)")
-        print("  fallback_enabled:=true      Enable fallback candidates (default: true)")
-        print("  max_attempts:=12            Max fallback candidates to try (default: 12)")
-        print("  yaw_candidates_deg:=...     Comma-separated yaw offsets (default: 0,30,-30,60,-60,90)")
-        print("  approach_height_candidates:=0.15,0.18,0.20  Fallback heights (default)")
-        print("  grasp_z_offset_candidates:=0.02,0.03,0.04   Fallback Z offsets (default)")
-        print("  prefer_lin_descend:=true    LIN then PTP for descend (default: true)")
+        print("  approach_height:=0.22       Approach height in meters (default: 0.22, works for all cube sizes up to ~80mm)")
+        print("  grasp_z_offset:=0.04        Grasp Z offset (default: 0.04, works for all cube sizes up to ~80mm)")
+        print("  grasp_yaw_offset_deg:=<deg>  Extra yaw (deg) for grasp (default: 0)")
+        print("  min_lift_height:=<value>    Minimum lift height above object in meters (default: None, uses approach_height)")
+        print("  cube_size:=<value>          Cube size/width in meters (if provided, calculates gripper close % automatically)")
+        print("  gripper_value:=50.0         Gripper close percentage (default: 50.0, ignored if cube_size provided)")
+        print("  gripper_open:=0.085         Gripper open distance in meters (default: 0.085 = 85mm for Robotiq 2F-85)")
+        print("  gripper_closed:=0.00        Gripper closed distance in meters (default: 0.00)")
+        print("  gripper_margin:=0.002       Squeeze margin in meters (default: 0.002 = 2mm)")
+        print("  pose_only:=true             Wait for pose and exit (no robot/execute); for pose-path validation.")
         print("")
         print("Closing program... BYE!")
         rclpy.shutdown()
@@ -547,39 +209,112 @@ def main(args=None):
     robot = AssignArgument("robot") or "ur5"
     ee_type = AssignArgument("ee_type") or "ParallelGripper"
     ee_link = AssignArgument("ee_link") or "EE_robotiq_2f85"
-    objects_str = AssignArgument("objects") or "cube1"
-    objects = [obj.strip() for obj in objects_str.split(",")]
     
-    approach_height = float(AssignArgument("approach_height") or "0.15")
-    grasp_z_offset = float(AssignArgument("grasp_z_offset") or "0.03")
-    gripper_value = float(AssignArgument("gripper_value") or "50.0")
-
+    # Defaults chosen to work for all cube sizes (50mm–80mm); higher values avoid INVALID_MOTION_PLAN on descend for large cubes
+    approach_height = float(AssignArgument("approach_height") or "0.22")
+    grasp_z_offset = float(AssignArgument("grasp_z_offset") or "0.04")
+    
+    # Parse min_lift_height (optional, None means use approach_height)
+    min_lift_height_arg = AssignArgument("min_lift_height")
+    min_lift_height = float(min_lift_height_arg) if min_lift_height_arg is not None else None
+    
+    # Parse cube_size and gripper parameters
+    cube_size_arg = AssignArgument("cube_size")
+    gripper_open = float(AssignArgument("gripper_open") or "0.085")
+    gripper_closed = float(AssignArgument("gripper_closed") or "0.00")
+    gripper_margin = float(AssignArgument("gripper_margin") or "0.002")
+    default_gripper_value = float(AssignArgument("gripper_value") or "50.0")
+    
+    # Parse fallback parameters
     def _parse_bool(val, default_true=True):
         s = (AssignArgument(val) or ("true" if default_true else "false")).lower()
         return s in ("1", "true", "yes")
-
+    
     fallback_enabled = _parse_bool("fallback_enabled", True)
     max_attempts = int(AssignArgument("max_attempts") or "12")
-    yaw_candidates_deg = [float(v) for v in (AssignArgument("yaw_candidates_deg") or "0,30,-30,60,-60,90").split(",")]
-    approach_height_candidates = [float(v) for v in (AssignArgument("approach_height_candidates") or "0.15,0.18,0.20").split(",")]
-    grasp_z_offset_candidates = [float(v) for v in (AssignArgument("grasp_z_offset_candidates") or "0.02,0.03,0.04").split(",")]
-    prefer_lin_descend = _parse_bool("prefer_lin_descend", True)
+    pose_only = _parse_bool("pose_only", False)  # ROS-only test: receive pose and exit (no robot/plan/execute)
     
-    # Create object pose
-    object_pose = Robpose()
-    object_pose.x = float(x)
-    object_pose.y = float(y)
-    object_pose.z = float(z)
-    object_pose.qx = float(qx)
-    object_pose.qy = float(qy)
-    object_pose.qz = float(qz)
-    object_pose.qw = float(qw)
+    # Grasp yaw offset: base orientation (-0.5,0.5,0.5,0.5) matches YAML and works for ParallelGripper (0 deg).
+    # Override with grasp_yaw_offset_deg:=<deg> if needed (e.g. for HandE try 90, -90, 180).
+    grasp_yaw_arg = AssignArgument("grasp_yaw_offset_deg")
+    grasp_yaw_offset_deg = float(grasp_yaw_arg) if grasp_yaw_arg is not None else 0.0
     
-    print(f"Object Pose: x={object_pose.x}, y={object_pose.y}, z={object_pose.z}")
-    print(f"Orientation: qx={object_pose.qx}, qy={object_pose.qy}, qz={object_pose.qz}, qw={object_pose.qw}")
+    # Calculate gripper close percentage if cube_size is provided
+    if cube_size_arg:
+        cube_width = float(cube_size_arg)
+        gripper_value = calculate_gripper_close_percentage(
+            cube_width=cube_width,
+            g_open=gripper_open,
+            g_closed=gripper_closed,
+            margin=gripper_margin
+        )
+
+    else:
+        gripper_value = default_gripper_value
+        print(f"[Pick]: Using default gripper close percentage: {gripper_value:.2f}%")
+        print(f"  (Tip: Provide cube_size:=<value> to calculate automatically)")
+        print("")
+    
+    print(f"Object: {object_name}")
     print(f"Robot: {robot}, EE Type: {ee_type}, EE Link: {ee_link}")
-    print(f"Objects: {objects}")
     print("")
+    
+    # ===== GET OBJECT POSE AUTOMATICALLY ===== #
+    print("============================================================")
+    print("Getting object pose automatically...")
+    print("")
+    
+    pose_getter = ObjectPoseGetter(object_name)
+    
+    # Wait for pose
+    print(f"[Pick]: Waiting for object pose from /object_poses/{object_name}...")
+    object_pose = pose_getter.get_pose(timeout=5.0)
+    
+    if object_pose is None:
+        print(f"ERROR: Could not get pose for object '{object_name}'")
+        print(f"Make sure:")
+        print(f"  1. Object '{object_name}' is spawned in Gazebo")
+        print(f"  2. Topic /object_poses/{object_name} is publishing")
+        print(f"  3. Object has a pose publisher plugin")
+        print("")
+        pose_getter.destroy_node()
+        rclpy.shutdown()
+        exit(1)
+    
+    print(f"[Pick]: Object pose retrieved successfully!")
+    print(f"  Position: x={object_pose.x:.3f}, y={object_pose.y:.3f}, z={object_pose.z:.3f}")
+    print(f"  Original orientation: qx={object_pose.qx:.3f}, qy={object_pose.qy:.3f}, qz={object_pose.qz:.3f}, qw={object_pose.qw:.3f}")
+    
+    if pose_only:
+        print("")
+        print("[Pick]: pose_only:=true -> Exiting after pose receipt (no robot/plan/execute).")
+        print("  This validates the real-robot pose path: /object_poses/<name> -> pick.")
+        pose_getter.destroy_node()
+        rclpy.shutdown()
+        exit(0)
+    
+    # IMPORTANT: Always use fixed top-down orientation for grasping, regardless of cube's current orientation
+    # This ensures cubes are always grasped parallel to the table, even if they were placed at an angle
+    # Calculate optimal gripper orientation for grasping (fixed top-down orientation)
+    qx, qy, qz, qw = calculate_grasp_orientation(
+        object_pose.x, object_pose.y, object_pose.z
+    )
+    # Rotate by grasp_yaw_offset_deg (0 for ParallelGripper = same as YAML; 90 for HandE so fingers face cube)
+    if grasp_yaw_offset_deg != 0.0:
+        qx, qy, qz, qw = _quat_rotate_yaw_deg(qx, qy, qz, qw, grasp_yaw_offset_deg)
+    
+    # Force fixed orientation - ignore cube's current orientation to prevent diagonal grasps
+    object_pose.qx = qx
+    object_pose.qy = qy
+    object_pose.qz = qz
+    object_pose.qw = qw
+    
+    print(f"  Using FIXED top-down grasp orientation (ignoring cube rotation): qx={qx:.3f}, qy={qy:.3f}, qz={qz:.3f}, qw={qw:.3f}")
+    if grasp_yaw_offset_deg != 0.0:
+        print(f"  Applied grasp_yaw_offset_deg={grasp_yaw_offset_deg:.1f}")
+    print("")
+    
+    pose_getter.destroy_node()
     
     # ===== LOAD ROBOT AND GRIPPER CLIENTS ===== #
     print("============================================================")
@@ -606,21 +341,16 @@ def main(args=None):
     
     if ee_type == "None":
         print("Not required.")
-    elif ee_type == "ParallelGripper":
-        sys.path.append(PATH_EEGz)
-        from parallelGripper import parallelGR  # type: ignore
-        EEClient = parallelGR(objects, robot, ee_link)
-        print("Loaded -> ParallelGripper.")
     elif ee_type == "VacuumGripper":
         sys.path.append(PATH_EEGz)
         from vacuumGripper import vacuumGR  # type: ignore
-        EEClient = vacuumGR(objects, robot, ee_link)
+        EEClient = vacuumGR([object_name], robot, ee_link)
         print("Loaded -> VacuumGripper.")
-    elif ee_type == "RobotiqHandE/UR":
-        sys.path.append(PATH_EE)
-        from robotiq_ur import RobotiqGRIPPER  # type: ignore
-        EEClient = RobotiqGRIPPER()
-        print("Loaded -> RobotiqHandE/UR.")
+    elif ee_type in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+        sys.path.append(PATH)
+        from endeffector.gripper_factory import create_gripper
+        EEClient = create_gripper(ee_type, robot, ee_link, [object_name])
+        print(f"Loaded -> {ee_type}.")
     else:
         print(f"WARNING: Unknown end-effector type '{ee_type}', continuing without gripper.")
     
@@ -661,10 +391,9 @@ def main(args=None):
     else:
         print("[Pick]: Robot pose topic not detected (may not be required).")
     
-    # Additional wait to ensure MoveIt!2 planning scene is ready
-    # This is especially important on first run
+    # Brief wait for MoveIt!2 planning scene (reduced from 2.0s for faster startup)
     print("[Pick]: Waiting for MoveIt!2 planning scene to initialize...")
-    time.sleep(1.0)  # Give MoveIt!2 time to fully initialize planning scene
+    time.sleep(0.5)
     print("[Pick]: System ready!")
     print("")
     
@@ -673,20 +402,39 @@ def main(args=None):
     
     # ===== CREATE CONFIG AND EXECUTE PICK ===== #
     print("============================================================")
-    print("Executing Pick action...")
+    print("Executing Automated Pick action...")
     print("")
     
+    # Explicitly enable fallbacks with proper configuration
+    # This ensures the robot tries PTP (fixed kinematics) first, then falls back to different solutions
     config = {
         "approach_height": approach_height,
         "grasp_z_offset": grasp_z_offset,
         "gripper_value": gripper_value,
-        "fallback_enabled": fallback_enabled,
-        "max_attempts": max_attempts,
-        "yaw_candidates_deg": yaw_candidates_deg,
-        "approach_height_candidates": approach_height_candidates,
-        "grasp_z_offset_candidates": grasp_z_offset_candidates,
-        "prefer_lin_descend": prefer_lin_descend,
+        "fallback_enabled": fallback_enabled,  # Use parsed value (default: True)
+        "max_attempts": max_attempts,  # Use parsed value (default: 12)
+        "yaw_candidates_deg": [0.0, 30.0, -30.0, 60.0, -60.0, 90.0],  # Try different orientations
+        "approach_height_candidates": [0.22, 0.20, 0.18],  # First value = default; works for all cube sizes up to ~80mm
+        "grasp_z_offset_candidates": [0.04, 0.03, 0.02],  # First value = default
+        "prefer_lin_descend": False,  # Try PTP (fixed/joint space) first, then LIN fallback
+        "min_lift_height": min_lift_height  # Minimum lift height to clear obstacles above
     }
+    
+    if min_lift_height is not None:
+        print(f"[Pick]: Using minimum lift height: {min_lift_height:.3f}m (to clear obstacles above object)")
+        print("")
+    
+    if fallback_enabled:
+        print("[Pick]: Fallback mechanism ENABLED")
+        print(f"  - Will try PTP (fixed kinematics) first for each candidate")
+        print(f"  - Will try up to {max_attempts} different solutions")
+        print(f"  - Yaw candidates: {config['yaw_candidates_deg']}")
+        print(f"  - Approach height candidates: {config['approach_height_candidates']}")
+        print(f"  - Grasp Z offset candidates: {config['grasp_z_offset_candidates']}")
+        print("")
+    else:
+        print("[Pick]: Fallback mechanism DISABLED - will only try single attempt")
+        print("")
     
     PickAction = Pick(RobotClient, EEClient, config)
     result = PickAction.execute(object_pose)
@@ -694,9 +442,9 @@ def main(args=None):
     # ===== RESULT ===== #
     print("============================================================")
     if result["Success"]:
-        print("Pick action completed SUCCESSFULLY!")
+        print("Automated Pick action completed SUCCESSFULLY!")
     else:
-        print("Pick action FAILED!")
+        print("Automated Pick action FAILED!")
     print(f"Message: {result['Message']}")
     print(f"Execution time: {result['ExecTime']}s")
     print("============================================================")

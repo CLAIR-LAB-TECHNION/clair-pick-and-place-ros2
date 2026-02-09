@@ -1,0 +1,51 @@
+# Baseline: no SetConstraints. Used to confirm identical behavior before/after.
+# Run: ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_setconstraints_baseline
+# Uses same home as ur5_demo (0,-90,0,-90,0,0) for reliable planning. Ensure sim/bringup is running.
+
+Specifications:
+  Robot: "ur5"
+  EndEffector: "ParallelGripper"
+  EELink: "EE_robotiq_2f85"
+  Objects: []
+
+Sequence:
+  - Step: 1
+    Name: "Move to home"
+    Type: "MoveJ"
+    Speed: 1.0
+    Delay: 0.3
+    Input:
+      joint1: 0.0
+      joint2: -89.0
+      joint3: 0.0
+      joint4: -90.0
+      joint5: 0.0
+      joint6: 0.0
+
+  - Step: 2
+    Name: "Traverse to pose in front"
+    Type: "RobMove"
+    Movement: "PTP"
+    Speed: 1.0
+    Delay: 0.3
+    Input:
+      x: 0.15
+      y: 0.48
+      z: 0.50
+      qx: -0.5
+      qy: 0.5
+      qz: 0.5
+      qw: 0.5
+
+  - Step: 3
+    Name: "Return to home"
+    Type: "MoveJ"
+    Speed: 1.0
+    Delay: 0.0
+    Input:
+      joint1: 0.0
+      joint2: -89.0
+      joint3: 0.0
+      joint4: -90.0
+      joint5: 0.0
+      joint6: 0.0

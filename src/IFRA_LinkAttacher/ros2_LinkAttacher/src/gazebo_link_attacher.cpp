@@ -173,11 +173,17 @@ void GazeboLinkAttacherPrivate::Attach(
 
   } else {
 
-    // Create a fixed joint between the two links:
+    // Create a fixed joint between the two links.
+    // Use current relative pose so the object stays where it is (e.g. between fingers);
+    // identity pose would snap the object to the EE link origin and make it look like it's "flying".
+    ignition::math::Pose3d world_parent = link1->WorldPose();
+    ignition::math::Pose3d world_child = link2->WorldPose();
+    ignition::math::Pose3d child_in_parent = world_parent.Inverse() * world_child;
+
     JointName = _req->model1_name + "_" + _req->link1_name + "_" + _req->model2_name + "_" + _req->link2_name + "_joint";
     gazebo::physics::JointPtr joint = model1->CreateJoint(JointName, "revolute", link1, link2);
     joint->Attach(link1, link2);
-    joint->Load(link1, link2, ignition::math::Pose3d());
+    joint->Load(link1, link2, child_in_parent);
     joint->SetProvideFeedback(true);
     
     joint->SetAxis(0, ignition::math::Vector3d(1, 0, 0));

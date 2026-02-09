@@ -199,9 +199,9 @@ def main():
     rclpy.init()
     spawner = ObjectSpawner()
     
-    # Give time for publishers to connect
+    # Brief time for publishers to connect
     import time
-    time.sleep(0.5)
+    time.sleep(0.2)
     
     success = True
     
@@ -212,8 +212,7 @@ def main():
     # Add to MoveIt
     if success and not args.gazebo_only:
         spawner.add_to_moveit(args)
-        # Give time for message to be received
-        time.sleep(0.5)
+        time.sleep(0.2)
     
     spawner.get_logger().info('Done!')
     spawner.destroy_node()

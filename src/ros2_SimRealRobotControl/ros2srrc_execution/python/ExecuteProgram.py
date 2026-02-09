@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 # ===== IMPORT REQUIRED COMPONENTS ===== #
 # System functions and classes:
 import sys, os, yaml, time
@@ -16,9 +16,13 @@ PATH_ROB = PATH + "/robot"
 sys.path.append(PATH_ROB)
 from robot import RBT
 
-# IMPORT -> High-level actions (Pick, Place):
+# IMPORT -> High-level actions (Pick, Place / Put Down) and HLD layers:
 sys.path.append(PATH)
-from pick import Pick, PickConfig
+from pick_manual import Pick, PickConfig
+from place_manual import Place, PlaceConfig
+from constraints_handler import apply_constraints
+from configuration_handler import set_configuration
+from error_handler import handle_step_result
 
 # IMPORT -> EE-Gz:
 sys.path.append(PATH_EEGz)
@@ -43,8 +47,8 @@ except ImportError:
     class vgrABB:
         pass
 
-# UR end-effectors (always available):
-from robotiq_ur import RobotiqGRIPPER  # type: ignore
+# UR end-effectors: use gripper factory (robotiq_2f85, onrobot_2fg7, ParallelGripper)
+# RobotiqGRIPPER retained only for backward compat in step dispatch
 
 # IMPORT ROS2 Custom Messages:
 from ros2srrc_data.msg import Action
@@ -161,42 +165,18 @@ def main(args=None):
     if seqRES["EEType"] == "None":
         EEClient = None
         print("Not required.")
-    
-    elif seqRES["EEType"] == "ParallelGripper":
-        EEClient = parallelGR(seqRES["Objects"], seqRES["Robot"], seqRES["EELink"])
-        print("Loaded -> ParallelGripper.")
-    
     elif seqRES["EEType"] == "VacuumGripper":
         EEClient = vacuumGR(seqRES["Objects"], seqRES["Robot"], seqRES["EELink"])
         print("Loaded -> VacuumGripper.")
-    
-    elif seqRES["EEType"] == "EGP64/ABB":
-        if not ABB_EE_AVAILABLE:
-            print("ERROR: ABB end-effector support is not available. abb_robot_msgs package is required for ABB robots.")
-            print("Closing program... BYE!")
-            exit()
-        EEClient = SchunkGRIPPER()
-        print("Loaded -> EGP64/ABB.")
-
-    elif seqRES["EEType"] == "GPP5010NC/ABB":
-        if not ABB_EE_AVAILABLE:
-            print("ERROR: ABB end-effector support is not available. abb_robot_msgs package is required for ABB robots.")
-            print("Closing program... BYE!")
-            exit()
-        EEClient = ZimmerGRIPPER()
-        print("Loaded -> GPP5010NC/ABB.")
-
-    elif seqRES["EEType"] == "vgr/ABB":
-        if not ABB_EE_AVAILABLE:
-            print("ERROR: ABB end-effector support is not available. abb_robot_msgs package is required for ABB robots.")
-            print("Closing program... BYE!")
-            exit()
-        EEClient = vgrABB()
-        print("Loaded -> vgr/ABB.")
-    
-    elif seqRES["EEType"] == "RobotiqHandE/UR":
-        EEClient = RobotiqGRIPPER()
-        print("Loaded -> RobotiqHandE/UR.")
+    elif seqRES["EEType"] in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+        from endeffector.gripper_factory import create_gripper
+        EEClient = create_gripper(
+            seqRES["EEType"], seqRES["Robot"], seqRES["EELink"], seqRES["Objects"]
+        )
+        print(f"Loaded -> {seqRES['EEType']}.")
+    else:
+        EEClient = None
+        print(f"WARNING: Unknown EndEffector '{seqRES['EEType']}', continuing without gripper.")
 
     print("")
 
@@ -333,11 +313,12 @@ def main(args=None):
                 RES = RobotClient.RobMove_EXECUTE(x["Movement"], x["Speed"], InputPose)
 
             elif x["Type"] == "ParallelGripper":
-
                 if x["Action"] == "CLOSE":
-                    RES = EEClient.CLOSE(x["Value"])
+                    val = x.get("Value", 100)
+                    percent = float(val) / 100.0 if val is not None else 1.0
+                    RES = EEClient.close(percent)
                 else:
-                    RES = EEClient.OPEN()
+                    RES = EEClient.open()
             
             elif x["Type"] == "VacuumGripper":
 
@@ -367,12 +348,13 @@ def main(args=None):
                 else:
                     RES = EEClient.DEACTIVATE()
 
-            elif x["Type"] == "RobotiqHandE/UR":
-
+            elif x["Type"] in ("RobotiqHandE/UR", "robotiq_2f85", "onrobot_2fg7"):
                 if x["Action"] == "CLOSE":
-                    RES = EEClient.CLOSE()
+                    val = x.get("Value", 100)
+                    percent = float(val) / 100.0 if val is not None else 1.0
+                    RES = EEClient.close(percent)
                 else:
-                    RES = EEClient.OPEN()
+                    RES = EEClient.open()
 
             elif x["Type"] == "Pick":
 
@@ -393,30 +375,48 @@ def main(args=None):
                 PickAction = Pick(RobotClient, EEClient, pick_config)
                 RES = PickAction.execute(ObjectPose)
 
+            elif x["Type"] == "Place" or x["Type"] == "PutDown":
+
+                # Create place pose from input (x ∈ R^6: position + orientation)
+                PlacePose = Robpose()
+                PlacePose.x = x["Input"]["x"]
+                PlacePose.y = x["Input"]["y"]
+                PlacePose.z = x["Input"]["z"]
+                PlacePose.qx = x["Input"]["qx"]
+                PlacePose.qy = x["Input"]["qy"]
+                PlacePose.qz = x["Input"]["qz"]
+                PlacePose.qw = x["Input"]["qw"]
+
+                # Get optional config parameters
+                place_config = x.get("Config", None)
+
+                # Create Place (Put Down) action instance and execute
+                PlaceAction = Place(RobotClient, EEClient, place_config)
+                RES = PlaceAction.execute(PlacePose)
+
+            elif x["Type"] == "SetConstraints":
+                RES = apply_constraints(x)
+
+            elif x["Type"] == "SetConfiguration":
+                RES = set_configuration(x)
+
             else:
                 print("ERROR: ACTION TYPE -> " + x["Type"] + " unknown.")
                 print("Closing program... BYE!")
                 exit()
 
-            # CHECK if STEP EXECUTION WAS SUCCESSFUL:
+            # CHECK if STEP EXECUTION WAS SUCCESSFUL (centralized error handling):
             print("")
-            
-            if RES["Success"] == False:
-                print("ERROR: Execution FAILED!")
-                print("Message -> " + RES["Message"])
-                print("")
-                print("Closing... BYE!")
-                exit()
-
-            else:
-                print("Execution SUCCESSFUL!")
-                print("Message -> " + RES["Message"])
-                print("")
+            handle_step_result(RES, step_name=x.get("Name", ""))
+            print("Execution SUCCESSFUL!")
+            print("Message -> " + RES["Message"])
+            print("")
                 
-            # ADD -> DELAY:
-            if x["Delay"] != 0.0:
-                print("Requested a waitTime of " + str(x["Delay"]) + " seconds.")
-                time.sleep(x["Delay"])
+            # ADD -> DELAY (optional pause after this step, in seconds; omit or set to 0 for no wait):
+            delay_s = float(x.get("Delay", 0.0))
+            if delay_s > 0.0:
+                print("Requested a waitTime of " + str(delay_s) + " seconds.")
+                time.sleep(delay_s)
                 print("")
                 
         except KeyboardInterrupt:

@@ -18,3 +18,9 @@ Configurations:
     urdf: "ur5_robotiq_hande.urdf.xacro"
     rob: "ur5"
     ee: "robotiq_hande"
+
+  - ID: "ur5_4"
+    Name: "UR5 + Robotiq 2FG7 gripper on top of Robot Stand."
+    urdf: "ur5_robotiq_2f85.urdf.xacro"
+    rob: "ur5"
+    ee: "robotiq_2fg7"

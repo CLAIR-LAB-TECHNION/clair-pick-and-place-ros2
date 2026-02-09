@@ -146,14 +146,17 @@ install(PROGRAMS
   python/RemoveObject.py
   python/RemoveObjectMoveIt.py
   python/ExecuteProgram.py
+  python/pick_manual.py
   python/pick.py
-  python/pick_auto.py
+  python/place_manual.py
   python/place.py
-  python/place_auto.py
   python/move_to_home.py
   python/hanoi_tower_demo.py
+  python/hanoi_pose_publisher.py
+  python/hanoi_publish_pose.py
   python/test_stacked_cubes.py
   python/upside_down_test.py
+  python/test_2fg7_connectivity.py
 
   python/testClients/test_Move.py
   python/testClients/test_RobMove.py

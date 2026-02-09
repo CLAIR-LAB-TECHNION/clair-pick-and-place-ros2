@@ -170,15 +170,13 @@ class LinkAttacher():
         self.CLIENT = LinkAttacher_Client(ROBOT, EE)
 
     def ATTACH(self, NAME):
-        """Attach object to gripper. Timeout so we don't hang if /ATTACHLINK doesn't respond."""
+
         global AttachCheck
 
         self.CLIENT.ATTACHService(NAME)
 
-        ATTACH_TIMEOUT_S = 5.0
-        t0 = time.time()
-        while rclpy.ok() and (time.time() - t0) < ATTACH_TIMEOUT_S:
-            rclpy.spin_once(self.CLIENT, timeout_sec=0.1)
+        while rclpy.ok():
+            rclpy.spin_once(self.CLIENT)
             if self.CLIENT.AttachFuture.done():
                 try:
                     AttachRES = self.CLIENT.AttachFuture.result()
@@ -197,18 +195,14 @@ class LinkAttacher():
                         print("[CLIENT - parallelGripper.py]: /ATTACHLINK unuccessful -> " + str(AttachRES.message))
                         print("")
                         return(False)
-
-        print("[CLIENT - parallelGripper.py]: /ATTACHLINK timed out after %.1fs." % ATTACH_TIMEOUT_S)
-        print("")
-        return(False)
                     
-    def DETACH(self, NAME):
+    def DETACH(self, NAME, timeout_sec=5.0):
         """Detach object from gripper. Timeout so we don't hang if /DETACHLINK doesn't respond."""
         global AttachCheck
 
         self.CLIENT.DETACHService(NAME)
 
-        DETACH_TIMEOUT_S = 5.0
+        DETACH_TIMEOUT_S = float(timeout_sec)
         t0 = time.time()
         while rclpy.ok() and (time.time() - t0) < DETACH_TIMEOUT_S:
             rclpy.spin_once(self.CLIENT, timeout_sec=0.1)
@@ -285,7 +279,7 @@ class MoveItSceneManager(Node):
         
         # Give time for message to be processed
         rclpy.spin_once(self, timeout_sec=0.1)
-        time.sleep(0.3)  # Give MoveIt time to process the removal (increased for stacked objects)
+        time.sleep(0.15)  # MoveIt to process removal
         
         # print(f"[CLIENT - parallelGripper.py]: MoveIt: Removed {object_name} from collision objects")  # DEBUG
         return True
@@ -530,13 +524,11 @@ class parallelGR():
                     # removed. We do NOT remove all other cubes - that would clear MoveIt of cubes
                     # on other pegs when picking one cube.
                     
-                    # Give MoveIt extra time to process all removals
+                    # Brief wait for MoveIt to process removals
                     if nearby_removed:
-                        # print(f"[CLIENT - parallelGripper.py]: Removed {len(nearby_removed)} nearby objects from MoveIt scene: {nearby_removed}")  # DEBUG
-                        time.sleep(0.5)  # Extra time when removing multiple objects
+                        time.sleep(0.25)  # Multiple objects removed
                     else:
-                        # print(f"[CLIENT - parallelGripper.py]: No objects removed from MoveIt scene")  # DEBUG
-                        time.sleep(0.3)
+                        time.sleep(0.15)
                     
                     print("[CLIENT - parallelGripper.py]: Now closing gripper.")
                     print("")
@@ -626,16 +618,28 @@ class parallelGR():
                             objNAME = try_name
                             detached = True
                             break
+                # Name variant: Gazebo may use underscore or not (e.g. cube_1 vs cube1)
+                if not detached and hasattr(self, 'objectNames') and len(self.objectNames) > 0:
+                    for try_name in self.objectNames:
+                        if try_name == "place_object":
+                            continue
+                        alt = try_name.replace("_", "") if "_" in try_name else (try_name.replace("cube", "cube_", 1) if try_name.startswith("cube") else None)
+                        if alt and alt != try_name:
+                            print(f"[CLIENT - parallelGripper.py]: Trying to detach (variant): {alt}")
+                            DetRES = self.LinkAttacher.DETACH(alt, timeout_sec=1.0)
+                            if DetRES:
+                                print(f"[CLIENT - parallelGripper.py]: Object {alt} detached.")
+                                objNAME = alt
+                                detached = True
+                                break
             
-            # If still not detached, try common object names
+            # If still not detached, try a few common names with short timeout (avoid 50s+ block)
             if not detached:
-                # Try cube0-cube9, then other common names
-                common_names = (["cube" + str(i) for i in range(10)] + 
-                               ["cube1", "cube2", "cube3", "box1", "cylinder1", "sphere1"])
-                print("[CLIENT - parallelGripper.py]: AttachCheck empty, trying common object names...")
+                common_names = ["cube0", "cube1", "cube2", "cube3"]
+                print("[CLIENT - parallelGripper.py]: AttachCheck empty, trying a few common object names (short timeout)...")
                 for try_name in common_names:
                     print(f"[CLIENT - parallelGripper.py]: Trying to detach: {try_name}")
-                    DetRES = self.LinkAttacher.DETACH(try_name)
+                    DetRES = self.LinkAttacher.DETACH(try_name, timeout_sec=1.0)
                     if DetRES:
                         print(f"[CLIENT - parallelGripper.py]: Object {try_name} detached.")
                         objNAME = try_name
@@ -658,7 +662,7 @@ class parallelGR():
         G.speed = 1.0
         G.moveg = 0.0
         OPEN_RETRIES = 3
-        OPEN_RETRY_DELAY_S = 0.4
+        OPEN_RETRY_DELAY_S = 0.2
         gRES = None
         for attempt in range(1, OPEN_RETRIES + 1):
             gRES = self.RBTClient.Move_EXECUTE(G)
@@ -681,8 +685,7 @@ class parallelGR():
         # This is needed so MoveIt can plan around it for future operations
         # We do this AFTER opening to avoid MoveIt detecting collisions during gripper opening motion
         if objNAME != "" and AttachCheck.ATTACHED == False:
-            # Wait for object to settle after gripper opens
-            time.sleep(0.3)  # Give object time to fall and settle
+            time.sleep(0.2)  # Brief settle after gripper opens
             
             # Get the object's current pose from Gazebo (via pose topic)
             if self.OLCheck:

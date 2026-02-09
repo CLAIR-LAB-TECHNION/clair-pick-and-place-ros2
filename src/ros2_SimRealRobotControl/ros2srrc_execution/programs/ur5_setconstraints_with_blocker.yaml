@@ -1,0 +1,64 @@
+# Same as baseline but with SetConstraints: big collision box in front of the robot
+# blocking the Traverse goal. Planning for Step 3 (RobMove) should fail (goal in collision).
+# Run: ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_setconstraints_with_blocker
+
+Specifications:
+  Robot: "ur5"
+  EndEffector: "ParallelGripper"
+  EELink: "EE_robotiq_2f85"
+  Objects: []
+
+Sequence:
+  - Step: 1
+    Name: "Add big collision box in front (blocks goal pose)"
+    Type: "SetConstraints"
+    Input:
+      type: collision_object
+      id: blocker_box
+      x: 0.15
+      y: 0.48
+      z: 0.50
+      size_x: 0.5
+      size_y: 0.5
+      size_z: 0.4
+
+  - Step: 2
+    Name: "Move to home"
+    Type: "MoveJ"
+    Speed: 1.0
+    Delay: 0.3
+    Input:
+      joint1: 0.0
+      joint2: -89.0
+      joint3: 0.0
+      joint4: -90.0
+      joint5: 0.0
+      joint6: 0.0
+
+  - Step: 3
+    Name: "Traverse to pose (through blocker - should fail)"
+    Type: "RobMove"
+    Movement: "PTP"
+    Speed: 1.0
+    Delay: 0.3
+    Input:
+      x: 0.15
+      y: 0.48
+      z: 0.50
+      qx: -0.5
+      qy: 0.5
+      qz: 0.5
+      qw: 0.5
+
+  - Step: 4
+    Name: "Return to home"
+    Type: "MoveJ"
+    Speed: 1.0
+    Delay: 0.0
+    Input:
+      joint1: 0.0
+      joint2: -89.0
+      joint3: 0.0
+      joint4: -90.0
+      joint5: 0.0
+      joint6: 0.0

@@ -61,15 +61,12 @@ def main():
     rclpy.init()
     remover = ObjectRemover()
     
-    # Give time for publishers to connect
     import time
-    time.sleep(0.5)
+    time.sleep(0.2)
     
     # Remove from MoveIt
     remover.remove_from_moveit(args.name)
-    
-    # Give time for message to be received
-    time.sleep(0.5)
+    time.sleep(0.2)
     
     remover.get_logger().info('Done!')
     remover.destroy_node()
