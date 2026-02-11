@@ -128,7 +128,7 @@ Task programs live in `ros2srrc_execution/programs/`. Optional steps: **SetConst
 
 ### To terminate
 
-Stop the nodes with Ctrl+C in each terminal, or send a kill signal. For real robot, stop execution first, then bringdown the bringup launch.
+Stop the nodes with Ctrl+C in each terminal, or send a kill signal. **Real robot:** Stop any running execution (ExecuteProgram, Pick, Place) first, then stop the bringup launch (Ctrl+C). The robot will stop moving when the driver disconnects; you can then stop the External Control program on the teach pendant if you want to release control.
 
 ---
 

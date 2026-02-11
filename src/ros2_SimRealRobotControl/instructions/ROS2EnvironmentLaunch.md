@@ -20,12 +20,12 @@ This command launches the Gazebo simulation along with the MoveIt!2 framework, e
 ros2 launch ros2srrc_launch moveit2.launch.py package:=<PACKAGE_NAME> config:=<CONFIG_NAME>
 ```
 
-__Real Robot Bringup + MoveIt!2 Framework (bringup.launch.py)__
+__Real Robot Bringup + MoveIt!2 Framework (UR: bringup/bringup_ur.launch.py)__
 
-This launches the ROS 2 driver for controlling a physical robot using the MoveIt!2 framework, along with the ROS 2tools (/Move, /RobMove, /RobPose). The IP address of the robot is required to connect to it. The specific launch file varies depending on the type of robot (e.g., ABB or UR).
+This launches the ROS 2 driver for controlling a physical robot using the MoveIt!2 framework, along with the ROS 2 tools (/Move, /RobMove, /RobPose). The IP address of the robot is required to connect to it. For UR robots use the bringup_ur launch file:
 
 ```sh
-ros2 launch ros2srrc_launch bringup.launch.py package:=<PACKAGE_NAME> config:=<CONFIG_NAME> robot_ip:=<ROBOT_IP>
+ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=<PACKAGE_NAME> config:=<CONFIG_NAME> robot_ip:=<ROBOT_IP>
 ```
 
 ## EXAMPLES: Launch default ROS 2 Environments in ros2_SimRealRobotControl
@@ -37,9 +37,8 @@ ros2 launch ros2srrc_launch simulation.launch.py package:=ros2srrc_irb120 config
 # ABB IRB-1200 Robot w/Schunk EGP-64 Parallel Gripper (moveit2):
 ros2 launch ros2srrc_launch moveit2.launch.py package:=ros2srrc_irb1200 config:=irb120_2
 
-# 
- Robot w/Robotiq Hand-E Gripper (bringup):
-ros2 launch ros2srrc_launch bringup.launch.py package:=ros2srrc_ur3 config:=ur3_3 robot_ip:=0.0.0.0
+# UR3 w/Robotiq Hand-E Gripper (bringup):
+ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur3 config:=ur3_3 robot_ip:=<ROBOT_IP>
 ```
 
 ## Connecting to Real Robots in ros2_SimRealRobotControl

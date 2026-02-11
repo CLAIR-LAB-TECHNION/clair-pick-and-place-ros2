@@ -150,6 +150,10 @@ ros2 run ros2srrc_execution test_2fg7_connectivity.py \
 
 If something fails, see **Part 6**.
 
+### Stopping (bringdown)
+
+Stop any running program (ExecuteProgram, Pick, Place) first, then press **Ctrl+C** in the bringup terminal. The robot stops when the driver disconnects. Optionally stop the **External Control** program on the teach pendant to release control.
+
 ---
 
 ## Part 6 — Quick troubleshooting
