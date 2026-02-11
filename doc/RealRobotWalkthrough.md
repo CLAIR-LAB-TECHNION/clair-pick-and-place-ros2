@@ -162,7 +162,39 @@ Stop any running program (ExecuteProgram, Pick, Place) first, then press **Ctrl+
 |--------|----------------|
 | Bringup fails to connect | External Control program **running** on pendant? Robot and PC on same subnet? Correct `robot_ip`? Firewall not blocking UR ports? |
 | Robot does not move when I run ExecuteProgram | Is bringup still running in the other terminal? Any errors in the bringup or ExecuteProgram terminal? |
+| **RViz Execute: I see motion in RViz but the real robot doesn't move** | See **Part 6.1** below. |
 | Gripper does not open/close | 2FG7 connected and powered? For XML-RPC: same `robot_ip` as robot; robot’s 2FG7 server (port 41414) reachable? Try `test_2fg7_connectivity.py` with `robot_ip`. |
 | “Service not available” / timeouts | Bringup must be running first so move_group and the 2FG7 params node are up. Start bringup, wait for it to finish loading, then run your program. |
+
+### Part 6.1 — RViz Execute: visualization updates but real robot doesn't move
+
+When you **Plan** in RViz, you see the planned path (orange) animate—that is only a preview. The **real** robot in the scene (and the physical robot) only move when **Execute** sends the trajectory to the controller and the controller runs it on the hardware. If the physical robot never moves when you click Execute, work through the following.
+
+1. **External Control must be running**  
+   On the teach pendant, the **External Control** program must be **running** (not just installed). If it is not running, the driver cannot send trajectories to the robot and the real robot will not move.
+
+2. **Use "Plan & Execute"**  
+   In the Motion Planning panel, use **Plan & Execute** instead of Plan then Execute. That plans from the **current** robot state and immediately sends the trajectory, which avoids the robot drifting between plan and execute and reduces start-state tolerance issues.
+
+3. **Confirm the trajectory controller is active**  
+   In a terminal (with `source install/setup.bash`):
+   ```bash
+   ros2 control list_controllers
+   ```
+   You should see `scaled_joint_trajectory_controller` in state **active**. If it is **inactive** or **unconfigured**, bringup did not start the controller correctly; check the bringup terminal for errors.
+
+4. **Confirm the action is available**  
+   ```bash
+   ros2 action list | grep follow_joint_trajectory
+   ```
+   You should see something like `/scaled_joint_trajectory_controller/follow_joint_trajectory`. If it is missing, MoveIt has nothing to send the trajectory to.
+
+5. **Watch the bringup terminal when you Execute**  
+   When you click Execute in RViz, watch the terminal where you ran **bringup**. MoveIt (move_group) and the controller often log errors there (e.g. execution failed, start state violation, or action rejected). Those messages explain why the real robot did not move.
+
+6. **Start state tolerance**  
+   If the robot has moved after you planned (e.g. you moved it by hand or it drifted), Execute can fail because the start state no longer matches. Use **Plan & Execute** so the plan is computed from the current state and executed right away.
+
+If all of the above are correct and the bringup terminal shows no errors on Execute, the trajectory is being sent; then the issue is likely on the robot side (e.g. External Control not running, or a different UR/driver configuration). See [RealRobotSetup.md](RealRobotSetup.md) for network and URCap details.
 
 For more detail on URCap, network, safety, and object poses, see [RealRobotSetup.md](RealRobotSetup.md).

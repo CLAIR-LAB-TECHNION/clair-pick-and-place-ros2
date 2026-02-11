@@ -88,12 +88,14 @@
     <xacro:property name="shoulder_pan_velocity_limit" value="3.1416" scope="parent"/>
     <xacro:property name="shoulder_pan_effort_limit" value="150.0" scope="parent"/>
     
-    <xacro:property name="shoulder_lift_lower_limit" value="-1.5707" scope="parent"/>
+    <!-- Epsilon below -pi/2 so small negative noise is not out of bounds (Pilz/limits check) -->
+    <xacro:property name="shoulder_lift_lower_limit" value="-1.58" scope="parent"/>
     <xacro:property name="shoulder_lift_upper_limit" value="3.1416" scope="parent"/>
     <xacro:property name="shoulder_lift_velocity_limit" value="3.1416" scope="parent"/>
     <xacro:property name="shoulder_lift_effort_limit" value="150.0" scope="parent"/>
     
-    <xacro:property name="elbow_joint_lower_limit" value="0.0" scope="parent"/>
+    <!-- Epsilon below 0 so small negative noise (e.g. -2.396e-05) is not out of bounds (Pilz/limits check) -->
+    <xacro:property name="elbow_joint_lower_limit" value="-0.01" scope="parent"/>
     <xacro:property name="elbow_joint_upper_limit" value="3.1416" scope="parent"/>
     <xacro:property name="elbow_joint_velocity_limit" value="3.1416" scope="parent"/>
     <xacro:property name="elbow_joint_effort_limit" value="150.0" scope="parent"/>

@@ -62,7 +62,7 @@ ros2srrc_data::msg::Robpose POSE;
 class ros2_RobotParam : public rclcpp::Node
 {
 public:
-    ros2_RobotParam() : Node("ros2_RobotParam") 
+    ros2_RobotParam() : Node("ros2_RobotParam_robpose") 
     {
         this->declare_parameter("ROB_PARAM", "none");
         param_ROB = this->get_parameter("ROB_PARAM").get_parameter_value().get<std::string>();
@@ -119,7 +119,7 @@ int main(int argc, char **argv)
     // Initialise MAIN NODE:
     rclcpp::init(argc, argv);
 
-    auto node_LOGGER = std::make_shared<rclcpp::Node>("MOVE_INTERFACE_log");
+    auto node_LOGGER = std::make_shared<rclcpp::Node>("robpose_log");
     
     // Obtain ROBOT parameter:
     auto node_PARAM_ROB = std::make_shared<ros2_RobotParam>();

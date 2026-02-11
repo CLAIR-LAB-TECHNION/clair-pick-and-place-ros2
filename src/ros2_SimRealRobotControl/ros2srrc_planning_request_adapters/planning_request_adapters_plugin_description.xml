@@ -1,0 +1,5 @@
+<library path="ros2srrc_planning_request_adapters">
+  <class name="ros2srrc_planning_request_adapters/SetDefaultPlannerId" type="ros2srrc_planning_request_adapters::SetDefaultPlannerId" base_class_type="planning_request_adapter::PlanningRequestAdapter">
+    <description>Substitutes empty planner_id with a configured default (e.g. PTP for Pilz). Use when RViz Motion Planning plugin sends an empty planner_id.</description>
+  </class>
+</library>

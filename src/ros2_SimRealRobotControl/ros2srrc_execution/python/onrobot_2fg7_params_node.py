@@ -15,9 +15,14 @@ def main(args=None):
     node.declare_parameter("robot_ip", "")
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # context may already be shut down by launch
 
 
 if __name__ == "__main__":

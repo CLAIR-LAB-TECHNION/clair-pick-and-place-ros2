@@ -51,6 +51,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 
 // Include MoveIt!2:
+#include <moveit/utils/moveit_error_code.h>
 #include <moveit/move_group_interface/move_group_interface_improved.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 
@@ -91,7 +92,7 @@ ros2srrc_data::msg::Specs eeSPECS;
 class ros2_RobotParam : public rclcpp::Node
 {
 public:
-    ros2_RobotParam() : Node("ros2_RobotParam") 
+    ros2_RobotParam() : Node("ros2_RobotParam_move") 
     {
         this->declare_parameter("ROB_PARAM", "none");
         param_ROB = this->get_parameter("ROB_PARAM").get_parameter_value().get<std::string>();
@@ -103,7 +104,7 @@ private:
 class ros2_EEParam : public rclcpp::Node
 {
 public:
-    ros2_EEParam() : Node("ros2_EEParam") 
+    ros2_EEParam() : Node("ros2_EEParam_move") 
     {
         this->declare_parameter("EE_PARAM", "none");
         param_EE = this->get_parameter("EE_PARAM").get_parameter_value().get<std::string>();
@@ -121,7 +122,7 @@ private:
 moveit::planning_interface::MoveGroupInterface::Plan plan_ROB() {
     
     moveit::planning_interface::MoveGroupInterface::Plan my_plan;
-    bool success = (move_group_interface_ROB.plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+    bool success = (move_group_interface_ROB.plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     // Execute the plan
     if (success)
@@ -140,7 +141,7 @@ moveit::planning_interface::MoveGroupInterface::Plan plan_ROB() {
 moveit::planning_interface::MoveGroupInterface::Plan plan_EE() {
     
     moveit::planning_interface::MoveGroupInterface::Plan my_plan;
-    bool success = (move_group_interface_EE.plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+    bool success = (move_group_interface_EE.plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     // Execute the plan
     if (success)
@@ -184,13 +185,12 @@ private:
     
     // ACCEPT GOAL and NOTIFY which ACTION is going to be exectuted:
     rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
+        const rclcpp_action::GoalUUID & /* uuid */,
         std::shared_ptr<const Move::Goal> goal)
     {
-        // 1. Obtain ACTION type + speed:
+        // 1. Obtain ACTION type (speed used in execute() via setMaxVelocityScalingFactor):
         std::string action;
         action = goal->action;
-        double speed = goal->speed;
 
         // 2. Assign VARIABLE TYPE accordingly, and notify:
         if (action == "MoveJ"){
@@ -368,7 +368,7 @@ private:
         // EXECUTE:
         if (RES == "PLANNING: OK"){
 
-            bool ExecSUCCESS = (move_group_interface_ROB.execute(MyPlan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+            bool ExecSUCCESS = (move_group_interface_ROB.execute(MyPlan) == moveit::core::MoveItErrorCode::SUCCESS);
 
             if (goal_handle->is_canceling()) {
                 RCLCPP_INFO(this->get_logger(), "Goal canceled.");
@@ -433,7 +433,7 @@ int main(int argc, char ** argv)
     // Initialise MAIN NODE:
     rclcpp::init(argc, argv);
 
-    auto node_LOGGER = std::make_shared<rclcpp::Node>("MOVE_INTERFACE_log");
+    auto node_LOGGER = std::make_shared<rclcpp::Node>("move_interface_log");
 
     // Obtain ROBOT + END-EFFECTOR + ENVIRONMENT parameters:
     auto node_PARAM_ROB = std::make_shared<ros2_RobotParam>();

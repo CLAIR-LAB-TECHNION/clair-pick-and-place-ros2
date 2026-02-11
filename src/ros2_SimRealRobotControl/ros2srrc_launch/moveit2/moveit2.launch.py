@@ -285,9 +285,10 @@ def generate_launch_description():
     pilz_planning_pipeline_config = {
         "move_group": {
             "planning_plugin": "pilz_industrial_motion_planner/CommandPlanner",
-            "request_adapters": """ """,
+            "request_adapters": "ros2srrc_planning_request_adapters/SetDefaultPlannerId",
             "start_state_max_bounds_error": 0.1,
             "default_planner_config": "PTP",
+            "request_adapters.SetDefaultPlannerId.default_planner_id": "PTP",
         }
     }
     pilz_cartesian_limits_yaml = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/pilz_cartesian_limits.yaml")

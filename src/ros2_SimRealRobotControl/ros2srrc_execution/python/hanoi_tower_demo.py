@@ -803,6 +803,13 @@ Examples:
             print(f"\n✗ FAILED: Invalid --initial_state: {e}")
             print('  Example for 5 cubes (Peg0=[cube_4], Peg1=[], Peg2=[cube_0..cube_3]): --initial_state "0:4;1:;2:0,1,2,3"')
             return 1
+    else:
+        # --skip_spawn without --initial_state: assume standard initial state (all cubes on Peg 0)
+        hanoi.pegs[0] = list(range(num_cubes))  # [0, 1, ..., num_cubes-1], smallest at bottom
+        hanoi.pegs[1] = []
+        hanoi.pegs[2] = []
+        print("\nSkip spawn: assuming standard initial state (all cubes on Peg 0).")
+        hanoi._print_state()
     
     # Solve the puzzle
     print("\n" + "="*60)

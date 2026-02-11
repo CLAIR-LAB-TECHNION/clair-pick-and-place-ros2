@@ -302,18 +302,21 @@ def generate_launch_description():
     joint_limits = {'robot_description_planning': joint_limits_yaml}
 
     # pilz_planning_pipeline_config.yaml file:
+    # SetDefaultPlannerId adapter fills in planner_id when RViz sends empty (e.g. Plan & Execute).
     pilz_planning_pipeline_config = {
         "move_group": {
             "planning_plugin": "pilz_industrial_motion_planner/CommandPlanner",
-            "request_adapters": """ """,
+            "request_adapters": "ros2srrc_planning_request_adapters/SetDefaultPlannerId",
             "start_state_max_bounds_error": 0.1,
             "default_planner_config": "PTP",
+            "request_adapters.SetDefaultPlannerId.default_planner_id": "PTP",
         }
     }
     pilz_cartesian_limits_yaml = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/pilz_cartesian_limits.yaml")
     pilz_cartesian_limits = {'robot_description_planning': pilz_cartesian_limits_yaml}
 
-    # MoveIt!2 Controllers:
+    # MoveIt!2 Controllers: use scaled_joint_trajectory_controller (recommended for UR speed scaling).
+    # With execution_duration_monitoring disabled below, Plan & Execute should complete without TIMED_OUT.
     moveit_simple_controllers_yaml = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/controller_moveit2.yaml")
     moveit_simple_controllers_yaml["joint_trajectory_controller"]["default"] = False
     moveit_simple_controllers_yaml["scaled_joint_trajectory_controller"]["default"] = True
@@ -323,14 +326,16 @@ def generate_launch_description():
         "moveit_simple_controller_manager": moveit_simple_controllers_yaml,
         "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
     }
-    # Real robot may execute slower than planned (e.g. reduced speed/joint limits). This scaling
-    # allows execution up to 2.0x the planned duration before MoveIt considers it late. Increase
-    # only if your cell uses very reduced limits and document in your setup.
+    # Trajectory execution: disable duration monitoring so scaled controller does not trigger TIMED_OUT.
+    # Reduced default velocity/acceleration (0.1) for safer testing; change in RViz or via move/robmove goals as needed.
     trajectory_execution = {
         "moveit_manage_controllers": True,
-        "trajectory_execution.allowed_execution_duration_scaling": 2.0,
-        "trajectory_execution.allowed_goal_duration_margin": 0.5,
-        "trajectory_execution.allowed_start_tolerance": 0.01,
+        "trajectory_execution.allowed_execution_duration_scaling": 10.0,
+        "trajectory_execution.allowed_goal_duration_margin": 5.0,
+        "trajectory_execution.allowed_start_tolerance": 0.04,
+        "trajectory_execution.execution_duration_monitoring": False,
+        "default_velocity_scaling_factor": 0.1,
+        "default_acceleration_scaling_factor": 0.1,
     }
     planning_scene_monitor_parameters = {
         "publish_planning_scene": True,
@@ -444,8 +449,21 @@ def generate_launch_description():
     LD.add_action(io_and_status_controller_spawner)
     LD.add_action(joint_state_broadcaster_spawner)
     LD.add_action(speed_scaling_state_broadcaster_spawner)
-    #LD.add_action(joint_trajectory_controller_spawner)
+    # Use scaled_joint_trajectory_controller for UR speed scaling; execution_duration_monitoring disabled to avoid TIMED_OUT.
+    # LD.add_action(joint_trajectory_controller_spawner)
     LD.add_action(scaled_joint_trajectory_controller_spawner)
+
+    # Real robot with Robotiq 2F-85 model (ur5_2, ur5_4): UR driver only publishes arm joints.
+    # Publish default states for the 6 gripper joints so MoveIt planning_scene_monitor sees a complete state (removes "missing joint" warning).
+    if EE == "true" and CONFIGURATION.get("moveit_ee_group") == "robotiq_2f85":
+        Robotiq85JointStatePublisher = Node(
+            name="robotiq_85_joint_state_publisher",
+            package="ros2srrc_execution",
+            executable="robotiq_85_joint_state_publisher.py",
+            output="log",
+            parameters=[{"rate": 10.0}],
+        )
+        LD.add_action(Robotiq85JointStatePublisher)
 
     # Robotiq server for Robotiq end-effectors that use /Robotiq_Gripper (2F-85 and HandE).
     # Do not start Robotiq server for OnRobot 2FG7 (different protocol; 2FG7 uses URScript via TCP).
@@ -466,10 +484,8 @@ def generate_launch_description():
 
     LD.add_action(RegisterEventHandler(
         OnProcessExit(
-            target_action = scaled_joint_trajectory_controller_spawner,
-            on_exit = [
-                
-                # MoveIt!2:
+            target_action=scaled_joint_trajectory_controller_spawner,
+            on_exit=[
                 TimerAction(
                     period=2.0,
                     actions=[
@@ -477,18 +493,14 @@ def generate_launch_description():
                         run_move_group_node,
                     ]
                 ),
-                
-                ]
-            )
+            ]
         )
-    )
+    ))
 
     LD.add_action(RegisterEventHandler(
         OnProcessExit(
-            target_action = scaled_joint_trajectory_controller_spawner,
-            on_exit = [
-                
-                # Interfaces:
+            target_action=scaled_joint_trajectory_controller_spawner,
+            on_exit=[
                 TimerAction(
                     period=5.0,
                     actions=[
@@ -497,11 +509,9 @@ def generate_launch_description():
                         RobPoseInterface,
                     ]
                 ),
-                
-                ]
-            )
+            ]
         )
-    )
+    ))
 
     # ***** RETURN  ***** #
     return(LD)

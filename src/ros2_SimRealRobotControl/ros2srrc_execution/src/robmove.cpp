@@ -10,6 +10,7 @@
 #include "ros2srrc_data/action/robmove.hpp"
 
 // Include MoveIt!2:
+#include <moveit/utils/moveit_error_code.h>
 #include <moveit/move_group_interface/move_group_interface_improved.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 
@@ -20,7 +21,7 @@ moveit::planning_interface::MoveGroupInterface move_group_interface_ROB;
 std::string param_ROB = "none";
 
 // Declaration of GLOBAL VARIABLE --> RES:
-auto RES = "none";
+std::string RES = "none";
 
 // Last MoveIt planning error code (for detailed failure message):
 int last_plan_error_code = 0;
@@ -68,7 +69,7 @@ static std::string moveit_error_string(int code) {
 class ros2_RobotParam : public rclcpp::Node
 {
 public:
-    ros2_RobotParam() : Node("ros2_RobotParam") 
+    ros2_RobotParam() : Node("ros2_RobotParam_robmove") 
     {
         this->declare_parameter("ROB_PARAM", "none");
         param_ROB = this->get_parameter("ROB_PARAM").get_parameter_value().get<std::string>();
@@ -103,7 +104,7 @@ moveit::planning_interface::MoveGroupInterface::Plan plan_ROB() {
         
         auto plan_result = move_group_interface_ROB.plan(my_plan);
         last_plan_error_code = plan_result.val;
-        success = (plan_result == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+        success = (plan_result == moveit::core::MoveItErrorCode::SUCCESS);
         
         if (success) {
             RCLCPP_INFO(rclcpp::get_logger("plan_ROB"), 
@@ -156,7 +157,7 @@ public:
 private:
     rclcpp_action::Server<Robmove>::SharedPtr action_server_;
 
-    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Robmove::Goal> goal)
+    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & /* uuid */, std::shared_ptr<const Robmove::Goal> goal)
     {
         RCLCPP_INFO(get_logger(), "RobMove (/Robmove) -> RECEIVED A ROBOT MOVEMENT REQUEST:");
         RCLCPP_INFO(get_logger(), "Movement TYPE -> %s", goal->type.c_str());
@@ -219,9 +220,9 @@ private:
 
         MyPlan = plan_ROB();
 
-        if (RES == "PLANNING: OK"){
+        if (RES == std::string("PLANNING: OK")){
 
-            bool ExecSUCCESS = (move_group_interface_ROB.execute(MyPlan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+            bool ExecSUCCESS = (move_group_interface_ROB.execute(MyPlan) == moveit::core::MoveItErrorCode::SUCCESS);
 
             if (goal_handle->is_canceling()) {
                 RCLCPP_INFO(this->get_logger(), "ROBOT MOVEMENT (%s) has been CANCELED.", GOAL->type.c_str());
@@ -268,7 +269,7 @@ int main(int argc, char **argv)
     // Initialise MAIN NODE:
     rclcpp::init(argc, argv);
     
-    auto node_LOGGER = std::make_shared<rclcpp::Node>("MOVE_INTERFACE_log");
+    auto node_LOGGER = std::make_shared<rclcpp::Node>("robmove_log");
 
     // Obtain ROBOT parameter:
     auto node_PARAM_ROB = std::make_shared<ros2_RobotParam>();

@@ -6,6 +6,11 @@
   <!-- XACRO-MACRO of Robotiq 2f-85: -->
   <xacro:macro name="robotiq_2f85" params="bringup parent_link">
 
+    <!-- Material used by finger pad links (must be defined for URDF parser) -->
+    <material name="black">
+      <color rgba="0.1 0.1 0.1 1"/>
+    </material>
+
     <xacro:unless value="${bringup}">  
       
       <!-- Robotiq 2f-85 TRANSMISSION: -->
@@ -90,9 +95,9 @@
       <inertial>
         <mass value="0.018491" />
         <origin xyz="0.0 0.0 0.0" />
-        <inertia ixx = "0.000009" ixy = "-0.000001" ixz = "0.000000"
-            iyx = "-0.000001" iyy = "0.000001" iyz = "0.000000"
-            izx = "0.000000" izy = "0.000000" izz = "0.000010" />
+        <inertia ixx="0.000009" ixy="0.0" ixz="0.0"
+            iyy="0.000006" iyz="0.0"
+            izz="0.000010" />
       </inertial>
     </link>
 
@@ -120,9 +125,9 @@
       <inertial>
         <mass value="0.018491" />
         <origin xyz="0.0 0.0 0.0" />
-        <inertia ixx = "0.000009" ixy = "-0.000001" ixz = "0.000000"
-            iyx = "-0.000001" iyy = "0.000001" iyz = "0.000000"
-            izx = "0.000000" izy = "0.000000" izz = "0.000010" />
+        <inertia ixx="0.000009" ixy="0.0" ixz="0.0"
+            iyy="0.000006" iyz="0.0"
+            izz="0.000010" />
       </inertial>
     </link>
 
@@ -428,6 +433,11 @@
           <box size= "0.001 0.001 0.001" />
         </geometry>
       </visual>
+      <collision>
+        <geometry>
+          <box size="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
     </link>
 
     <joint name="EE_robotiq_2f85_joint" type="fixed" >

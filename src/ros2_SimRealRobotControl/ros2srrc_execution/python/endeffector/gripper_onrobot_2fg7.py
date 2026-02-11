@@ -5,7 +5,7 @@
 #    http://<robot_ip>:41414 — methods twofg_grip_external, twofg_get_* etc.
 #    No URScript; control via OnRobot 2FG7 XML-RPC server on the robot.
 #
-# 2) URScript over TCP (optional): port 30002, send rq_set_width(...) etc.
+# 2) URScript over TCP (optional): port 50003 (custom), send rq_set_width(...) etc.
 #    Set protocol:=urscript and configure open_script_template, close_script_template.
 #
 # Params: robot_ip, protocol (xmlrpc | urscript), gripper_id, force, speed,
@@ -43,11 +43,11 @@ _RELEASE_FORCE = 80
 # Force/speed limits from reference (2FG7 electrical system)
 _FORCE_MIN = 20
 
-# URScript fallback
+# URScript fallback (custom port 50003 for script execution)
 _DEFAULT_OPEN_SCRIPT = "rq_set_width(110)\n"
 _DEFAULT_CLOSE_SCRIPT = "rq_set_width({width})\n"
 _DEFAULT_JAW_WIDTH_OPEN_MM = 110.0
-_DEFAULT_URSCRIPT_PORT = 30002
+_DEFAULT_URSCRIPT_PORT = 41414
 _DEFAULT_WAIT_AFTER_CMD = 0.75
 _DEFAULT_TCP_TIMEOUT = 5.0
 
@@ -281,7 +281,7 @@ class _ParamReader(Node):
 class OnRobot2FG7Backend(GripperInterface):
     """
     OnRobot 2FG7: protocol "xmlrpc" (default) uses HTTP :41414 (twofg_grip_external, twofg_get_*).
-    protocol "urscript" uses TCP :30002 and script templates.
+    protocol "urscript" uses TCP :50003 (custom) and script templates.
     """
 
     def __init__(

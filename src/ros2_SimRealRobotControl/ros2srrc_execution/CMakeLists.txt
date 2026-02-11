@@ -158,6 +158,7 @@ install(PROGRAMS
   python/upside_down_test.py
   python/test_2fg7_connectivity.py
   python/onrobot_2fg7_params_node.py
+  python/robotiq_85_joint_state_publisher.py
 
   python/testClients/test_Move.py
   python/testClients/test_RobMove.py

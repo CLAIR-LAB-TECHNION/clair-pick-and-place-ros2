@@ -6,7 +6,7 @@ joint_limits:
     max_acceleration: 5.0
   shoulder_lift_joint:
     has_position_limits: true
-    min_position: -1.5707  # Allow standing position (-90°) but prevent going further down
+    min_position: -1.58  # Epsilon below -90° so small negative noise is not out of bounds (Pilz/limits)
     max_position: 3.1416  # ~180 degrees
     has_velocity_limits: true
     max_velocity: 1.5
@@ -14,7 +14,7 @@ joint_limits:
     max_acceleration: 5.0
   elbow_joint:
     has_position_limits: true
-    min_position: 0.0  # Prevent elbow from going down (elbow-up only)
+    min_position: -0.01  # Epsilon below 0 so small negative noise is not out of bounds (Pilz/limits)
     max_position: 3.1416  # ~180 degrees up
     has_velocity_limits: true
     max_velocity: 1.5
