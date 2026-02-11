@@ -42,9 +42,12 @@ def AssignArgument(ARGUMENT):
             return(ARG)
 
 # GET CONFIGURATION from YAML:
+# Supports legacy "ee" or explicit srdf_ee_id, moveit_ee_group, ee_driver, ee_link.
+# RESULT["ee"] = moveit_ee_group or ee (for "has EE" / "none" checks).
 def GetCONFIG(CONFIGURATION, PKG_PATH):
     
-    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": ""}
+    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": "",
+              "srdf_ee_id": "", "moveit_ee_group": "", "ee_driver": "", "ee_link": ""}
     
     YAML_PATH = PKG_PATH + "/config/configurations.yaml"
     
@@ -55,14 +58,19 @@ def GetCONFIG(CONFIGURATION, PKG_PATH):
         cYAML = yaml.safe_load(YAML)
 
     for x in cYAML["Configurations"]:
-
         if x["ID"] == CONFIGURATION:
             RESULT["Success"] = True
             RESULT["ID"] = x["ID"]
             RESULT["Name"] = x["Name"]
             RESULT["urdf"] = x["urdf"]
             RESULT["rob"] = x["rob"]
-            RESULT["ee"] = x["ee"]
+            legacy_ee = x.get("ee", "none")
+            RESULT["srdf_ee_id"] = x.get("srdf_ee_id") or legacy_ee
+            RESULT["moveit_ee_group"] = x.get("moveit_ee_group") or legacy_ee
+            RESULT["ee_driver"] = x.get("ee_driver") or legacy_ee
+            RESULT["ee_link"] = x.get("ee_link") or ("EE_" + (x.get("moveit_ee_group") or legacy_ee) if (x.get("moveit_ee_group") or legacy_ee) != "none" else "")
+            RESULT["ee"] = RESULT["moveit_ee_group"] if (RESULT["moveit_ee_group"] and RESULT["moveit_ee_group"] != "none") else legacy_ee
+            break
 
     return(RESULT)
 
@@ -172,19 +180,19 @@ def generate_launch_description():
     # Generate ROBOT_DESCRIPTION variable:
     doc = xacro.parse(open(xacro_file))
     
-    if CONFIGURATION["ee"] == "none":
+    if CONFIGURATION["ee"] == "none" or (CONFIGURATION.get("moveit_ee_group") or "none") == "none":
         EE = "false"
-    else: 
+    else:
         EE = "true"
     
     xacro.process_doc(doc, mappings={
         "EE": EE,
-        "EE_name": CONFIGURATION["ee"],
+        "EE_name": CONFIGURATION["moveit_ee_group"] if EE == "true" else "none",
     })
     
     # EE -> Controller file needed?
     if EE == "true":
-        if EEctrlEXISTS(CONFIGURATION["ee"]) == False:
+        if EEctrlEXISTS(CONFIGURATION["moveit_ee_group"]) == False:
             EE = "true-NOctr"
     
     robot_description_config = doc.toxml()
@@ -235,7 +243,7 @@ def generate_launch_description():
 
     # EE CONTROLLERS:
     if EE == "true":
-        CONTROLLERS = GetEEctr(CONFIGURATION["ee"])
+        CONTROLLERS = GetEEctr(CONFIGURATION["moveit_ee_group"])
         CONTROLLER_NODES = []
 
         for x in CONTROLLERS:
@@ -250,11 +258,11 @@ def generate_launch_description():
     # *********************** MoveIt!2 *********************** #   
 
     # *** PLANNING CONTEXT *** #
-    # Robot description, SRDF:
+    # Robot description, SRDF (filename from srdf_ee_id):
     if (EE == "false"):
         robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + ".srdf")
     else:
-        robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + "_" + CONFIGURATION["ee"] + ".srdf")
+        robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + "_" + CONFIGURATION["srdf_ee_id"] + ".srdf")
     
     robot_description_semantic = {"robot_description_semantic": robot_description_semantic_config}
 
@@ -267,7 +275,7 @@ def generate_launch_description():
         joint_limits_yaml = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/joint_limits.yaml")
     else:
         YAML_ROB = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/joint_limits.yaml")["joint_limits"]
-        YAML_EE = load_yaml("ros2srrc_endeffectors", CONFIGURATION["ee"] + "/config/joint_limits.yaml")["joint_limits"]
+        YAML_EE = load_yaml("ros2srrc_endeffectors", CONFIGURATION["moveit_ee_group"] + "/config/joint_limits.yaml")["joint_limits"]
         joint_limits_yaml = {}
         joint_limits_yaml["joint_limits"] = YAML_ROB | YAML_EE
     
@@ -290,7 +298,7 @@ def generate_launch_description():
         moveit_simple_controllers_yaml = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/controller_moveit2.yaml")
     else:
         YAML_ROB = load_yaml("ros2srrc_robots", CONFIGURATION["rob"] + "/config/controller_moveit2.yaml")
-        YAML_EE = load_yaml("ros2srrc_endeffectors", CONFIGURATION["ee"] + "/config/controller_moveit2.yaml")
+        YAML_EE = load_yaml("ros2srrc_endeffectors", CONFIGURATION["moveit_ee_group"] + "/config/controller_moveit2.yaml")
         for x in YAML_ROB["controller_names"]:
             YAML_EE["controller_names"].append(x)
         moveit_simple_controllers_yaml = YAML_ROB | YAML_EE
@@ -340,12 +348,12 @@ def generate_launch_description():
         ],
     )
 
-    # RVIZ:
+    # RVIZ (config filename from srdf_ee_id):
     rviz_base = os.path.join(get_package_share_directory("ros2srrc_moveit"), "config")
     if EE == "false":
         rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + ".rviz")
     else:
-        rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + "_" + CONFIGURATION["ee"] + ".rviz")
+        rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + "_" + CONFIGURATION["srdf_ee_id"] + ".rviz")
 
     rviz_node_full = Node(
         package="rviz2",
@@ -374,26 +382,15 @@ def generate_launch_description():
     # =================================================================================================== #
     # ============================= ros2srrc_execution -> CUSTOM INTERFACES ============================= #
 
-    # Move and Sequence:
-    if EE == "true":
-
-        MoveInterface = Node(
-            name="move",
-            package="ros2srrc_execution",
-            executable="move",
-            output="screen",
-            parameters=[robot_description, robot_description_semantic, kinematics_yaml, {"use_sim_time": True}, {"ROB_PARAM": CONFIGURATION["rob"]}, {"EE_PARAM": CONFIGURATION["ee"]}, {"ENV_PARAM": "gazebo"}],
-        )
-
-    else:
-
-        MoveInterface = Node(
-            name="move",
-            package="ros2srrc_execution",
-            executable="move",
-            output="screen",
-            parameters=[robot_description, robot_description_semantic, kinematics_yaml, {"use_sim_time": True}, {"ROB_PARAM": CONFIGURATION["rob"]}, {"EE_PARAM": "none"}, {"ENV_PARAM": "gazebo"}],
-        )
+    # Move and Sequence (EE_PARAM = moveit_ee_group):
+    move_ee_param = CONFIGURATION["moveit_ee_group"] if (EE == "true" and CONFIGURATION.get("moveit_ee_group")) else "none"
+    MoveInterface = Node(
+        name="move",
+        package="ros2srrc_execution",
+        executable="move",
+        output="screen",
+        parameters=[robot_description, robot_description_semantic, kinematics_yaml, {"use_sim_time": True}, {"ROB_PARAM": CONFIGURATION["rob"]}, {"EE_PARAM": move_ee_param}, {"ENV_PARAM": "gazebo"}],
+    )
 
     # RobMove and RobPose:
     RobMoveInterface = Node(

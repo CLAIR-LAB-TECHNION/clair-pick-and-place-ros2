@@ -1,4 +1,9 @@
 # ROS 2 Sim-to-Real Robot Control: UR5 Robot.
+# End-effector config can use legacy "ee" or explicit:
+#   srdf_ee_id     -> SRDF filename (config/ur5_${srdf_ee_id}.srdf)
+#   moveit_ee_group -> MoveIt group name + endeffector folder (EE_PARAM for move node)
+#   ee_driver      -> gripper_factory backend key (execution layer)
+#   ee_link        -> end-effector link name (e.g. EE_robotiq_2f85)
 Configurations:
 
   - ID: "ur5_1"
@@ -12,15 +17,29 @@ Configurations:
     urdf: "ur5_robotiq_2f85.urdf.xacro"
     rob: "ur5"
     ee: "robotiq_2f85"
+    srdf_ee_id: "robotiq_2f85"
+    moveit_ee_group: "robotiq_2f85"
+    ee_driver: "robotiq_2f85"
+    ee_link: "EE_robotiq_2f85"
 
   - ID: "ur5_3"
     Name: "UR5 + Robotiq HandE gripper on top of Robot Stand."
     urdf: "ur5_robotiq_hande.urdf.xacro"
     rob: "ur5"
     ee: "robotiq_hande"
+    srdf_ee_id: "robotiq_hande"
+    moveit_ee_group: "robotiq_hande"
+    ee_driver: "RobotiqHandE/UR"
+    ee_link: "EE_robotiq_hande"
 
+  # ur5_4: Real UR5 + OnRobot 2FG7. Robot description (URDF) intentionally uses 2F-85
+  # geometry for planning, collision, and RViz; physical gripper is 2FG7, controlled via
+  # the OnRobot backend (ee_driver: onrobot_2fg7). See README "Primary use cases".
   - ID: "ur5_4"
-    Name: "UR5 + Robotiq 2FG7 gripper on top of Robot Stand."
+    Name: "UR5 + OnRobot 2FG7 gripper on top of Robot Stand."
     urdf: "ur5_robotiq_2f85.urdf.xacro"
     rob: "ur5"
-    ee: "robotiq_2fg7"
+    srdf_ee_id: "robotiq_2fg7"
+    moveit_ee_group: "robotiq_2f85"
+    ee_driver: "onrobot_2fg7"
+    ee_link: "EE_robotiq_2f85"

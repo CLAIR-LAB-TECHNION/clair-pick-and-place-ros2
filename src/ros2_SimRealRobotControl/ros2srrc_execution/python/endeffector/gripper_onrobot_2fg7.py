@@ -51,6 +51,7 @@ _DEFAULT_URSCRIPT_PORT = 30002
 _DEFAULT_WAIT_AFTER_CMD = 0.75
 _DEFAULT_TCP_TIMEOUT = 5.0
 
+_BRINGUP_PARAMS_NODE_NAME = "onrobot_2fg7_bringup_params"
 _ROBOT_CLIENT_NODE_NAME = "ros2srrc_RobMove_Client"
 _ROBOT_IP_ERROR_MSG = (
     "OnRobot 2FG7: robot_ip not set. Set it with:\n"
@@ -239,6 +240,10 @@ class _ParamReader(Node):
 
     def get_robot_ip(self) -> str:
         ip = self.get_parameter("robot_ip").get_parameter_value().string_value or ""
+        ip = (ip or "").strip()
+        if ip:
+            return ip
+        ip = _get_robot_ip_from_node(self, _BRINGUP_PARAMS_NODE_NAME)
         ip = (ip or "").strip()
         if ip:
             return ip

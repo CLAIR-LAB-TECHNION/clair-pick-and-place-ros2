@@ -82,8 +82,8 @@ def getSEQUENCE(packageNAME, yamlNAME):
 
     RESULT["Sequence"] = seqYAML["Sequence"]
     RESULT["Robot"] = seqYAML["Specifications"]["Robot"]
-    RESULT["EEType"] = seqYAML["Specifications"]["EndEffector"]
-    RESULT["EELink"] = seqYAML["Specifications"]["EELink"]
+    RESULT["EEType"] = seqYAML["Specifications"].get("EndEffector") or ""
+    RESULT["EELink"] = seqYAML["Specifications"].get("EELink") or ""
     RESULT["Objects"] = seqYAML["Specifications"]["Objects"]
     RESULT["Success"] = True
     
@@ -137,6 +137,17 @@ def main(args=None):
         print("ERROR: " + yamlPATH + " file not found. Please try again.")
         print("Closing program... BYE!")
         exit()
+
+    # Optional default EndEffector when program YAML does not specify one (e.g. ee_driver from config):
+    node = rclpy.create_node("ExecuteProgram_tmp")
+    node.declare_parameter("default_ee_driver", "")
+    default_ee = node.get_parameter("default_ee_driver").get_parameter_value().string_value
+    node.destroy_node()
+    if (not seqRES["EEType"] or str(seqRES["EEType"]).strip() == "None") and default_ee:
+        seqRES["EEType"] = default_ee
+        print("Using default EndEffector from parameter default_ee_driver: " + default_ee)
+    if not seqRES["EELink"] and seqRES["EEType"] and str(seqRES["EEType"]) != "None":
+        seqRES["EELink"] = "EE_robotiq_2f85"  # fallback when EELink missing
 
     # ASSIGN -> SEQUENCE:
     SEQUENCE = seqRES["Sequence"]

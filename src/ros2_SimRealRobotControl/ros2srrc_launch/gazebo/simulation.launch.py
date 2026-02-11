@@ -42,9 +42,11 @@ def AssignArgument(ARGUMENT):
             return(ARG)
 
 # GET CONFIGURATION from YAML:
+# Supports legacy "ee" or explicit srdf_ee_id, moveit_ee_group, ee_driver, ee_link.
 def GetCONFIG(CONFIGURATION, PKG_PATH):
     
-    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": ""}
+    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": "",
+              "srdf_ee_id": "", "moveit_ee_group": "", "ee_driver": "", "ee_link": ""}
     
     YAML_PATH = PKG_PATH + "/config/configurations.yaml"
     
@@ -55,14 +57,19 @@ def GetCONFIG(CONFIGURATION, PKG_PATH):
         cYAML = yaml.safe_load(YAML)
 
     for x in cYAML["Configurations"]:
-
         if x["ID"] == CONFIGURATION:
             RESULT["Success"] = True
             RESULT["ID"] = x["ID"]
             RESULT["Name"] = x["Name"]
             RESULT["urdf"] = x["urdf"]
             RESULT["rob"] = x["rob"]
-            RESULT["ee"] = x["ee"]
+            legacy_ee = x.get("ee", "none")
+            RESULT["srdf_ee_id"] = x.get("srdf_ee_id") or legacy_ee
+            RESULT["moveit_ee_group"] = x.get("moveit_ee_group") or legacy_ee
+            RESULT["ee_driver"] = x.get("ee_driver") or legacy_ee
+            RESULT["ee_link"] = x.get("ee_link") or ("EE_" + (x.get("moveit_ee_group") or legacy_ee) if (x.get("moveit_ee_group") or legacy_ee) != "none" else "")
+            RESULT["ee"] = RESULT["moveit_ee_group"] if (RESULT["moveit_ee_group"] and RESULT["moveit_ee_group"] != "none") else legacy_ee
+            break
 
     return(RESULT)
 
@@ -157,19 +164,19 @@ def generate_launch_description():
     # Generate ROBOT_DESCRIPTION variable:
     doc = xacro.parse(open(xacro_file))
     
-    if CONFIGURATION["ee"] == "none":
+    if CONFIGURATION["ee"] == "none" or (CONFIGURATION.get("moveit_ee_group") or "none") == "none":
         EE = "false"
     else:
         EE = "true"
     
     xacro.process_doc(doc, mappings={
         "EE": EE,
-        "EE_name": CONFIGURATION["ee"],
+        "EE_name": CONFIGURATION["moveit_ee_group"] if EE == "true" else "none",
     })
     
     # EE -> Controller file needed?
     if EE == "true":
-        if EEctrlEXISTS(CONFIGURATION["ee"]) == False:
+        if EEctrlEXISTS(CONFIGURATION["moveit_ee_group"]) == False:
             EE = "true-NOctr"
     
     robot_description_config = doc.toxml()
@@ -207,7 +214,7 @@ def generate_launch_description():
 
     # EE CONTROLLERS:
     if EE == "true":
-        CONTROLLERS = GetEEctr(CONFIGURATION["ee"])
+        CONTROLLERS = GetEEctr(CONFIGURATION["moveit_ee_group"])
         CONTROLLER_NODES = []
 
         for x in CONTROLLERS:
