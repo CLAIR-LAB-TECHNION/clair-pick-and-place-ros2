@@ -157,6 +157,7 @@ install(PROGRAMS
   python/test_stacked_cubes.py
   python/upside_down_test.py
   python/test_2fg7_connectivity.py
+  python/onrobot_2fg7_params_node.py
 
   python/testClients/test_Move.py
   python/testClients/test_RobMove.py

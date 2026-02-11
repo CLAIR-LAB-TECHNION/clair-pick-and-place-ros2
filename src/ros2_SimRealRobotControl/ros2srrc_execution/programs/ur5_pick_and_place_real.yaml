@@ -1,5 +1,5 @@
 # Real UR5 + Robotiq HandE gripper — use with bringup config ur5_3
-# Launch: ros2 launch ros2srrc_launch bringup.launch.py package:=ros2srrc_ur5 config:=ur5_3 robot_ip:=<ROBOT_IP>
+# Launch: ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_3 robot_ip:=<ROBOT_IP>
 # Run:   ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_real
 # HandE TCP frame is aligned with ur5_2 (2f85) in URDF; same Pick/Place orientation as ur5_2.
 Specifications:

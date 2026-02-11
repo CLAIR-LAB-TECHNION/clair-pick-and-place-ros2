@@ -71,9 +71,12 @@ def AssignArgument(ARGUMENT):
             return(ARG)
 
 # GET CONFIGURATION from YAML:
+# Supports legacy "ee" or explicit srdf_ee_id, moveit_ee_group, ee_driver, ee_link.
+# RESULT["ee"] = moveit_ee_group or ee (for "has EE" / "none" checks).
 def GetCONFIG(CONFIGURATION, PKG_PATH):
     
-    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": ""}
+    RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": "",
+              "srdf_ee_id": "", "moveit_ee_group": "", "ee_driver": "", "ee_link": ""}
     
     YAML_PATH = PKG_PATH + "/config/configurations.yaml"
     
@@ -84,14 +87,19 @@ def GetCONFIG(CONFIGURATION, PKG_PATH):
         cYAML = yaml.safe_load(YAML)
 
     for x in cYAML["Configurations"]:
-
         if x["ID"] == CONFIGURATION:
             RESULT["Success"] = True
             RESULT["ID"] = x["ID"]
             RESULT["Name"] = x["Name"]
             RESULT["urdf"] = x["urdf"]
             RESULT["rob"] = x["rob"]
-            RESULT["ee"] = x["ee"]
+            legacy_ee = x.get("ee", "none")
+            RESULT["srdf_ee_id"] = x.get("srdf_ee_id") or legacy_ee
+            RESULT["moveit_ee_group"] = x.get("moveit_ee_group") or legacy_ee
+            RESULT["ee_driver"] = x.get("ee_driver") or legacy_ee
+            RESULT["ee_link"] = x.get("ee_link") or ("EE_" + (x.get("moveit_ee_group") or legacy_ee) if (x.get("moveit_ee_group") or legacy_ee) != "none" else "")
+            RESULT["ee"] = RESULT["moveit_ee_group"] if (RESULT["moveit_ee_group"] and RESULT["moveit_ee_group"] != "none") else legacy_ee
+            break
 
     return(RESULT)
 
@@ -160,9 +168,9 @@ def generate_launch_description():
         print("Closing... BYE!")
         exit()   
 
-    if CONFIGURATION["ee"] == "none":
+    if CONFIGURATION["ee"] == "none" or (CONFIGURATION.get("moveit_ee_group") or "none") == "none":
         EE = "false"
-    else: 
+    else:
         EE = "true"
 
     # ========== CELL INFORMATION ========== #
@@ -194,14 +202,14 @@ def generate_launch_description():
     # Generate ROBOT_DESCRIPTION variable:
     doc = xacro.parse(open(xacro_file))
     
-    if CONFIGURATION["ee"] == "none":
+    if CONFIGURATION["ee"] == "none" or (CONFIGURATION.get("moveit_ee_group") or "none") == "none":
         EE = "false"
-    else: 
+    else:
         EE = "true"
     
     xacro.process_doc(doc, mappings={
         "EE": EE,
-        "EE_name": CONFIGURATION["ee"],
+        "EE_name": CONFIGURATION["moveit_ee_group"] if EE == "true" else "none",
 
         "robot_ip": robot_ip,
         "bringup": "true",
@@ -277,11 +285,11 @@ def generate_launch_description():
     # *********************** MoveIt!2 *********************** #   
 
     # *** PLANNING CONTEXT *** #
-    # Robot description, SRDF:
+    # Robot description, SRDF (filename from srdf_ee_id):
     if EE == "false":
         robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + ".srdf")
     else:
-        robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + "_" + CONFIGURATION["ee"] + ".srdf")
+        robot_description_semantic_config = load_file("ros2srrc_moveit", "config/" + CONFIGURATION["rob"] + "_" + CONFIGURATION["srdf_ee_id"] + ".srdf")
     
     robot_description_semantic = {"robot_description_semantic": robot_description_semantic_config}
 
@@ -315,9 +323,12 @@ def generate_launch_description():
         "moveit_simple_controller_manager": moveit_simple_controllers_yaml,
         "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
     }
+    # Real robot may execute slower than planned (e.g. reduced speed/joint limits). This scaling
+    # allows execution up to 2.0x the planned duration before MoveIt considers it late. Increase
+    # only if your cell uses very reduced limits and document in your setup.
     trajectory_execution = {
         "moveit_manage_controllers": True,
-        "trajectory_execution.allowed_execution_duration_scaling": 10.0, # Value increased to accommodate the "decreased" joint limits.
+        "trajectory_execution.allowed_execution_duration_scaling": 2.0,
         "trajectory_execution.allowed_goal_duration_margin": 0.5,
         "trajectory_execution.allowed_start_tolerance": 0.01,
     }
@@ -354,12 +365,12 @@ def generate_launch_description():
         ],
     )
 
-    # RVIZ:
+    # RVIZ (config filename from srdf_ee_id):
     rviz_base = os.path.join(get_package_share_directory("ros2srrc_moveit"), "config")
     if EE == "false":
         rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + ".rviz")
     else:
-        rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + "_" + CONFIGURATION["ee"] + ".rviz")
+        rviz_full_config = os.path.join(rviz_base, CONFIGURATION["rob"] + "_" + CONFIGURATION["srdf_ee_id"] + ".rviz")
 
     rviz_node_full = Node(
         package="rviz2",
@@ -387,13 +398,14 @@ def generate_launch_description():
     # =================================================================================================== #
     # ============================= ros2srrc_execution -> CUSTOM INTERFACES ============================= #
 
-    # Move:
+    # Move (EE_PARAM = moveit_ee_group so move node sees valid MoveIt group / endeffector folder):
+    move_ee_param = CONFIGURATION["moveit_ee_group"] if (EE == "true" and CONFIGURATION["moveit_ee_group"]) else "none"
     MoveInterface = Node(
         name="move",
         package="ros2srrc_execution",
         executable="move",
         output="screen",
-        parameters=[robot_description, robot_description_semantic, kinematics_yaml, {"ROB_PARAM": CONFIGURATION["rob"]}, {"EE_PARAM": "none"}, {"ENV_PARAM": "bringup"}],
+        parameters=[robot_description, robot_description_semantic, kinematics_yaml, {"ROB_PARAM": CONFIGURATION["rob"]}, {"EE_PARAM": move_ee_param}, {"ENV_PARAM": "bringup"}],
     )
     # RobMove and RobPose:
     RobMoveInterface = Node(
@@ -435,10 +447,21 @@ def generate_launch_description():
     #LD.add_action(joint_trajectory_controller_spawner)
     LD.add_action(scaled_joint_trajectory_controller_spawner)
 
-    # Robotiq server only for actual Robotiq end-effectors (HandE uses same service).
+    # Robotiq server for Robotiq end-effectors that use /Robotiq_Gripper (2F-85 and HandE).
     # Do not start Robotiq server for OnRobot 2FG7 (different protocol; 2FG7 uses URScript via TCP).
-    # TODO: If needed, launch a dedicated OnRobot/2FG7 driver node here when CONFIGURATION["ee"] == "robotiq_2fg7".
-    if CONFIGURATION["ee"] == "robotiq_hande":
+    # OnRobot 2FG7: expose robot_ip via a small params node so ExecuteProgram can get it without -p OnRobot2FG7_param_reader.robot_ip.
+    if CONFIGURATION["ee_driver"] == "onrobot_2fg7":
+        OnRobot2FG7ParamsNode = Node(
+            name="onrobot_2fg7_bringup_params",
+            package="ros2srrc_execution",
+            executable="onrobot_2fg7_params_node.py",
+            output="screen",
+            parameters=[{"robot_ip": robot_ip}],
+        )
+        LD.add_action(OnRobot2FG7ParamsNode)
+    # Start Robotiq server for both robotiq_2f85 (ur5_2) and RobotiqHandE (ur5_3); both use same /Robotiq_Gripper service.
+    # Server is parameterised with robot_ip (HandE is on-robot; 2F-85 often same network; if gripper has different IP, run server separately).
+    if CONFIGURATION["ee_driver"] in ("robotiq_2f85", "RobotiqHandE/UR") or CONFIGURATION["moveit_ee_group"] == "robotiq_hande":
         LD.add_action(RobotiqServer)
 
     LD.add_action(RegisterEventHandler(

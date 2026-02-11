@@ -1,6 +1,23 @@
 # clair-pick-and-place-ros2
 
-A ROS 2 workspace for **sim-to-real** pick-and-place with a UR5 arm. This project provides a **high-level execution layer**: **Pick** and **Place** primitives, a **program runner** (ExecuteProgram) for task sequences, and a **Tower of Hanoi** demo—in simulation (Gazebo) or on a real UR5 with OnRobot 2FG7.
+A ROS 2 workspace for **sim-to-real** pick-and-place with a UR5 arm. This project provides a **high-level execution layer**: **Pick** and **Place** primitives, a **program runner** (ExecuteProgram) for task sequences, and the **Tower of Hanoi** demo—in simulation (Gazebo) or on a real UR5 with OnRobot 2FG7.
+
+---
+
+## Primary use cases
+
+This project is intended for two main workflows:
+
+| Use case | Hardware | Config | Launch | Programs / demos |
+|----------|----------|--------|--------|-------------------|
+| **1. Real robot** | UR5 arm + **OnRobot 2FG7** gripper | **ur5_4** | `bringup/bringup_ur.launch.py` with `config:=ur5_4` and `robot_ip:=<IP>` | Pick-place, Hanoi demo, etc. Use programs with `EndEffector: "onrobot_2fg7"` (e.g. `ur5_pick_and_place_2fg7`). |
+| **2. Simulation** | UR5 + **Robotiq 2F-85** gripper in Gazebo | **ur5_2** | `moveit2.launch.py` with `config:=ur5_2` | Pick-place, Hanoi demo with `EndEffector: "ParallelGripper"` or `"robotiq_2f85"` (e.g. `ur5_pick_and_place`). |
+
+- **Real (1):** External PC runs ROS 2; robot runs the External Control URCap program. Motion via ur_robot_driver + MoveIt 2; gripper via OnRobot 2FG7 backend (URScript/XML-RPC). For config **ur5_4**, the robot description (URDF) intentionally uses **Robotiq 2F-85 geometry** for planning, collision, and visualization; the physical gripper is OnRobot 2FG7 and is controlled via the OnRobot backend. This approximation is documented in `packages/ros2srrc_ur5/config/configurations.yaml`.
+- **Real UR5 + Robotiq 2F-85 (config ur5_2):** Supported. Bringup starts the Robotiq gripper server (`ros2_robotiqgripper`) with `robot_ip` so one launch brings up both arm and gripper. If your 2F-85 has a different IP than the robot, do not rely on bringup for the gripper: start the server separately, e.g. `ros2 run ros2_robotiqgripper server.py --ros-args -p IPAddress:=<GRIPPER_IP>`.
+- **Sim (2):** Gazebo + MoveIt 2 + ros2_control; same task layer (ExecuteProgram, Pick, Place, Hanoi) with a different gripper model and program YAML.
+
+---
 
 ## About
 
@@ -45,7 +62,7 @@ Libraries and packages required to run the project:
 * **ros2srrc_data** (in-tree) – custom messages and actions
 * **ros2_linkattacher**, **ros2_objectpose**, **ros2_linkpose** (in-tree, IFRA_*) – Gazebo attach/pose
 * For real UR5: [Universal Robots ROS 2 driver](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver) (`ros-humble-ur`)
-
+* For real UR5 setup (URCap, External Control, networking): see [Real robot setup (UR)](doc/RealRobotSetup.md). **Step-by-step:** [Walkthrough: making the real robot move](doc/RealRobotWalkthrough.md).
 
 ## Topics subscribed to
 
@@ -70,7 +87,7 @@ Parameters that users can change, **introduced by this project**.
 | Parameter   | Meaning | Default | Where declared |
 | ----------- | ------- | ------- | --------------- |
 | **ROB_PARAM** | Robot planning group name for MoveIt (e.g. `ur5`). | `none` | C++ nodes: move, robmove, robpose |
-| **EE_PARAM** | End-effector name for MoveIt group (e.g. `robotiq_2f85` for sim, `robotiq_2fg7` for real). | `none` | C++ node: move |
+| **EE_PARAM** | MoveIt group / endeffector name (e.g. `robotiq_2f85` for sim ur5_2 and real ur5_4). Set from config `moveit_ee_group`. | `none` | C++ node: move |
 | **robot_ip** | Real robot IP; used by bringup and optionally by 2FG7 backend. | (empty) | robot.py; gripper_onrobot_2fg7.py |
 | **OnRobot2FG7_param_reader.robot_ip** | Robot IP for 2FG7 (XML-RPC/URScript). | (empty) | gripper_onrobot_2fg7.py (node `OnRobot2FG7_param_reader`) |
 | **protocol** (2FG7) | 2FG7 control: `xmlrpc` or `urscript`. | `xmlrpc` | gripper_onrobot_2fg7.py |
@@ -95,16 +112,17 @@ Then in another terminal:
 ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place
 ```
 
-**Real UR5 (OnRobot 2FG7, config ur5_4):**
+**Real UR5 (OnRobot 2FG7, config ur5_4):**  
+See [Real robot setup (UR)](doc/RealRobotSetup.md) for URCap, External Control, and network prerequisites. Then:
 
 ```console
-ros2 launch ros2srrc_launch bringup.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
+ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
 ```
 
 ```console
-ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_2fg7 \
-  --ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>
+ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_2fg7
 ```
+If bringup is running, `robot_ip` is provided by the bringup params node. Otherwise pass it: `--ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>`.
 
 Task programs live in `ros2srrc_execution/programs/`. Optional steps: **SetConstraints**, **SetConfiguration** (see in-repo HLD mapping).
 
@@ -144,12 +162,12 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
 
 ### On real UR5 (OnRobot 2FG7)
 
-1. **Terminal 1 – start real robot bringup** with config `ur5_4` (OnRobot 2FG7). Install the UR driver first: `sudo apt install -y ros-humble-ur`.
+1. **Terminal 1 – start real robot bringup** with config `ur5_4` (OnRobot 2FG7). See [Real robot setup (UR)](doc/RealRobotSetup.md) for prerequisites. Install the UR driver first: `sudo apt install -y ros-humble-ur`.
 
    ```console
    source /opt/ros/humble/setup.bash
    source ~/dev_ws/install/setup.bash
-   ros2 launch ros2srrc_launch bringup.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
+   ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
    ```
 
 2. **Terminal 2 – run the Hanoi demo** (same sourcing). On real hardware you must use **`--skip_spawn`** (no Gazebo); the table and cubes are physical. Object poses must be provided on **`/object_poses/<name>`** (`nav_msgs/Odometry`), e.g. from a perception node publishing `/object_poses/cube_0`, `/object_poses/cube_1`, etc., or adapt the demo to use fixed positions.

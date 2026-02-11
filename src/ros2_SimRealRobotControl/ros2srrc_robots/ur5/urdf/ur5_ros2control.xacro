@@ -174,7 +174,7 @@
           <param name="tool_baud_rate">${tool_baud_rate}</param>
           <param name="tool_stop_bits">${tool_stop_bits}</param>
           <param name="tool_rx_idle_chars">${tool_rx_idle_chars}</param>
-          <param name="tool_tx_idle_chatf_prefixrs">${tool_tx_idle_chars}</param>
+          <param name="tool_tx_idle_chars">${tool_tx_idle_chars}</param>
           <param name="tool_device_name">${tool_device_name}</param>
           <param name="tool_tcp_port">${tool_tcp_port}</param>
           <param name="keep_alive_count">${keep_alive_count}</param>
