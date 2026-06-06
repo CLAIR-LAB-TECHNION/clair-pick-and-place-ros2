@@ -235,6 +235,18 @@ def main(args=None):
     fallback_enabled = _parse_bool("fallback_enabled", True)
     max_attempts = int(AssignArgument("max_attempts") or "12")
     pose_only = _parse_bool("pose_only", False)  # ROS-only test: receive pose and exit (no robot/plan/execute)
+
+    support_cubes_arg = AssignArgument("support_cubes")
+    support_cube_names = [
+        s.strip() for s in support_cubes_arg.split(",") if s.strip()
+    ] if support_cubes_arg else []
+    support_sizes_arg = AssignArgument("support_cube_sizes")
+    support_cube_sizes = {}
+    if support_sizes_arg:
+        for part in support_sizes_arg.split(","):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                support_cube_sizes[k.strip()] = float(v.strip())
     
     # Grasp yaw offset: base orientation (-0.5,0.5,0.5,0.5) matches YAML and works for ParallelGripper (0 deg).
     # Override with grasp_yaw_offset_deg:=<deg> if needed (e.g. for HandE try 90, -90, 180).
@@ -422,6 +434,9 @@ def main(args=None):
         "gripper_closed": gripper_closed,
         "gripper_margin": gripper_margin,
         "cube_size": cube_size_for_config,
+        "object_name": object_name,
+        "support_cube_names": support_cube_names,
+        "support_cube_sizes": support_cube_sizes,
     }
     
     if min_lift_height is not None:

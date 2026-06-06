@@ -133,6 +133,20 @@ class PickConfig:
             if "min_lift_height" in config_dict:
                 val = config_dict["min_lift_height"]
                 self.min_lift_height = float(val) if val is not None else None
+            if "object_name" in config_dict:
+                self.object_name = config_dict["object_name"]
+            if "support_cube_names" in config_dict:
+                self.support_cube_names = list(config_dict["support_cube_names"])
+            if "support_cube_sizes" in config_dict:
+                self.support_cube_sizes = dict(config_dict["support_cube_sizes"])
+
+        # Scene management for stacked picks (target + cubes below block gripper descend)
+        if not hasattr(self, "object_name"):
+            self.object_name = None
+        if not hasattr(self, "support_cube_names"):
+            self.support_cube_names = []
+        if not hasattr(self, "support_cube_sizes"):
+            self.support_cube_sizes = {}
 
     def get_gripper_close_percent(self):
         """
@@ -179,6 +193,56 @@ class Pick:
             self.config = PickConfig(config)
         else:
             self.config = config
+        self._scene_manager = None
+        self._removed_for_descend = []
+        self._scene_prepared = False
+
+    def _get_scene_manager(self):
+        if self._scene_manager is None:
+            PATH = os.path.join(get_package_share_directory("ros2srrc_execution"), "python", "endeffector_gz")
+            sys.path.append(PATH)
+            from parallelGripper import MoveItSceneManager
+            self._scene_manager = MoveItSceneManager()
+            rclpy.spin_once(self._scene_manager, timeout_sec=0.1)
+        return self._scene_manager
+
+    def _prepare_scene_for_descend(self, object_pose):
+        """Remove only the target cube from MoveIt so the gripper can descend without clearing other stacks."""
+        if not self.config.object_name:
+            return
+        if self._scene_prepared:
+            return
+        mgr = self._get_scene_manager()
+        self._removed_for_descend = []
+        name = self.config.object_name
+        all_poses = mgr.get_all_collision_objects()
+        pose = Robpose()
+        pose_data = all_poses.get(name)
+        if pose_data:
+            pose.x = pose_data["x"]
+            pose.y = pose_data["y"]
+            pose.z = pose_data["z"]
+        else:
+            pose.x = object_pose.x
+            pose.y = object_pose.y
+            pose.z = object_pose.z
+        size = self.config.cube_size or 0.05
+        mgr.remove_from_moveit(name)
+        self._removed_for_descend.append((name, pose, size))
+        print(f"[Pick]: Cleared MoveIt collision for descend (target only): {name}")
+        print("")
+        time.sleep(0.1)
+        self._scene_prepared = True
+
+    def _restore_scene_objects(self):
+        """Re-add the target cube to MoveIt if pick failed before grasp."""
+        if not self._removed_for_descend:
+            return
+        mgr = self._get_scene_manager()
+        for name, pose, size in self._removed_for_descend:
+            mgr.add_to_moveit(name, pose, size=size)
+        self._removed_for_descend = []
+        self._scene_prepared = False
     
     def _calculate_poses(self, object_pose, approach_height=None, grasp_z_offset=None, quat_override=None):
         """
@@ -305,6 +369,8 @@ class Pick:
 
         candidates = self._build_candidates(object_pose)[: self.config.max_attempts]
         N = len(candidates)
+        self._scene_prepared = False
+        self._removed_for_descend = []
 
         for i, c in enumerate(candidates):
             attempt = i + 1
@@ -324,6 +390,9 @@ class Pick:
             if not approach_result["Success"]:
                 print(f"[Pick][Attempt {attempt}/{N}][type={c['type_str']}] Step 1 (Approach) failed: {approach_result['Message']}")
                 continue
+
+            # Remove only the target cube from MoveIt before descend (other stacks stay for planning)
+            self._prepare_scene_for_descend(object_pose)
 
             # Step 2: Descend (PTP first - fixed position, then LIN fallback)
             # Try PTP (joint space/fixed position) first as it's more reliable
@@ -358,6 +427,7 @@ class Pick:
                     RES["Message"] = f"Pick FAILED at Step 3 (Grasp): {grasp_result.get('Message', 'unknown')}"
                     T_end = time.time()
                     RES["ExecTime"] = round(T_end - T_start, 4)
+                    self._restore_scene_objects()
                     return RES
             else:
                 print("[Pick]: WARNING - No gripper client provided, skipping grasp step.")
@@ -377,6 +447,10 @@ class Pick:
             print("[Pick]: Step 4/4 - Object lifted successfully.")
             print("")
 
+            # Target stays out of MoveIt while attached; clear tracking only
+            self._removed_for_descend = []
+            self._scene_prepared = False
+
             T_end = time.time()
             RES["Success"] = True
             RES["Message"] = "Pick sequence completed successfully."
@@ -387,6 +461,7 @@ class Pick:
 
         RES["Message"] = f"Pick FAILED: all {N} candidates failed."
         RES["ExecTime"] = round(time.time() - T_start, 4)
+        self._restore_scene_objects()
         print(f"[Pick]: {RES['Message']}")
         return RES
 

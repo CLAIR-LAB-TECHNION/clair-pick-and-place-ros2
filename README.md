@@ -64,6 +64,88 @@ Libraries and packages required to run the project:
 * For real UR5: [Universal Robots ROS 2 driver](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver) (`ros-humble-ur`)
 * For real UR5 setup (URCap, External Control, networking): see [Real robot setup (UR)](doc/RealRobotSetup.md). **Step-by-step:** [Walkthrough: making the real robot move](doc/RealRobotWalkthrough.md).
 
+## Installation
+
+These steps assume Ubuntu 22.04 and a workspace at `~/clair-pick-and-place-ros2` (adjust paths if you cloned elsewhere).
+
+### 1. ROS 2 Humble and system packages
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ros-humble-desktop \
+  ros-dev-tools \
+  ros-humble-moveit \
+  ros-humble-xacro \
+  ros-humble-ros2-control \
+  ros-humble-ros2-controllers \
+  ros-humble-gripper-controllers \
+  ros-humble-gazebo-ros-pkgs \
+  ros-humble-gazebo-ros2-control \
+  ros-humble-rmw-cyclonedds-cpp \
+  gazebo
+```
+
+If you see an apt error about conflicting `Signed-By` for `packages.ros.org`, you have duplicate ROS repo entries. Keep only one source file:
+
+```bash
+sudo rm /etc/apt/sources.list.d/ros2.list   # if ros2.sources already exists
+sudo apt update
+```
+
+Do **not** re-run manual `curl … ros.key` / `ros2.list` setup if the ROS repo is already configured.
+
+### 2. Clone and build
+
+```bash
+cd ~
+git clone https://github.com/marybayyouk/clair-pick-and-place-ros2.git
+cd ~/clair-pick-and-place-ros2
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build
+```
+
+### 3. MoveIt header patch (required once)
+
+The execution nodes use a patched MoveIt header. Copy it into your ROS install:
+
+```bash
+sudo cp ~/clair-pick-and-place-ros2/src/ros2_SimRealRobotControl/include/move_group_interface_improved.h \
+  /opt/ros/humble/include/moveit/move_group_interface/
+```
+
+See `src/ros2_SimRealRobotControl/include/README.md` for details.
+
+### 4. Shell environment
+
+Add to `~/.bashrc` (once):
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/clair-pick-and-place-ros2/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+```
+
+Then run `source ~/.bashrc` in each open terminal, or open new terminals.
+
+Verify:
+
+```bash
+echo $ROS_DISTRO          # humble
+ros2 pkg list | grep ros2srrc_execution
+```
+
+### Helper scripts
+
+From the workspace root, these scripts source the environment automatically:
+
+| Script | Purpose |
+|--------|---------|
+| `./setup_env.sh` | Source ROS + workspace (use as `source setup_env.sh`) |
+| `./launch_sim.sh` | Start Gazebo + MoveIt 2 (`ur5_2`) |
+| `./run_hanoi.sh [N]` | Run Hanoi demo with `N` cubes (default: 2) |
+
 ## Topics subscribed to
 
 Topics that this project's nodes subscribe to:
@@ -97,34 +179,52 @@ Parameters that users can change, **introduced by this project**.
 
 ## Usage
 
-### To run
+**Important:** Source the workspace before any `ros2` command (see [Installation](#installation)). If you see `Package 'ros2srrc_execution' not found`, run `source ~/.bashrc`.
 
-**Simulation (Gazebo + MoveIt 2):**
+### Simulation (Gazebo + MoveIt 2)
+
+**Terminal 1 – start simulation:**
 
 ```console
-source ~/dev_ws/install/setup.bash
+cd ~/clair-pick-and-place-ros2
+./launch_sim.sh
+```
+
+Or manually:
+
+```console
+source /opt/ros/humble/setup.bash
+source ~/clair-pick-and-place-ros2/install/setup.bash
 ros2 launch ros2srrc_launch moveit2.launch.py package:=ros2srrc_ur5 config:=ur5_2
 ```
 
-Then in another terminal:
+Wait until Gazebo and MoveIt 2 are fully loaded.
+
+**Terminal 2 – run a task program:**
 
 ```console
+source /opt/ros/humble/setup.bash
+source ~/clair-pick-and-place-ros2/install/setup.bash
 ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place
 ```
 
-**Real UR5 (OnRobot 2FG7, config ur5_4):**  
+Task programs live in `ros2srrc_execution/programs/`. Optional steps: **SetConstraints**, **SetConfiguration** (see in-repo HLD mapping).
+
+### Real UR5 (OnRobot 2FG7, config ur5_4)
+
 See [Real robot setup (UR)](doc/RealRobotSetup.md) for URCap, External Control, and network prerequisites. Then:
 
 ```console
+source /opt/ros/humble/setup.bash
+source ~/clair-pick-and-place-ros2/install/setup.bash
 ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
 ```
 
 ```console
 ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_2fg7
 ```
-If bringup is running, `robot_ip` is provided by the bringup params node. Otherwise pass it: `--ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>`.
 
-Task programs live in `ros2srrc_execution/programs/`. Optional steps: **SetConstraints**, **SetConfiguration** (see in-repo HLD mapping).
+If bringup is running, `robot_ip` is provided by the bringup params node. Otherwise pass it: `--ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>`.
 
 ### To terminate
 
@@ -138,18 +238,26 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
 
 ### On Gazebo (simulation)
 
-1. **Terminal 1 – start Gazebo and MoveIt 2** (e.g. UR5 with parallel gripper, config `ur5_2`):
+1. **Terminal 1 – start Gazebo and MoveIt 2** (config `ur5_2`):
+
+   ```console
+   cd ~/clair-pick-and-place-ros2
+   ./launch_sim.sh
+   ```
+
+2. **Terminal 2 – run the Hanoi demo:**
+
+   ```console
+   cd ~/clair-pick-and-place-ros2
+   ./run_hanoi.sh 3
+   ```
+
+   Or manually:
 
    ```console
    source /opt/ros/humble/setup.bash
-   source ~/dev_ws/install/setup.bash
-   ros2 launch ros2srrc_launch moveit2.launch.py package:=ros2srrc_ur5 config:=ur5_2
-   ```
-
-2. **Terminal 2 – run the Hanoi demo** (same sourcing):
-
-   ```console
-   ros2 run ros2srrc_execution hanoi_tower_demo.py 
+   source ~/clair-pick-and-place-ros2/install/setup.bash
+   ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3
    ```
 
    Optional arguments: `--num_cubes` (1–8), `--peg_spacing`, `--table_x`, `--table_y`, `--table_z`, `--cube_size_base`, `--cube_height`, `--skip_spawn`, `--initial_state`. Example with 5 cubes:
@@ -158,19 +266,25 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
    ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 5 --peg_spacing 0.20
    ```
 
+   | Cubes | Moves | Approx. runtime |
+   |-------|-------|-----------------|
+   | 2 | 3 | few minutes |
+   | 3 | 7 | ~10 min |
+   | 5 | 31 | 30+ min |
+
    The demo spawns the table and cubes in Gazebo and uses `/object_poses/<name>` (from the Gazebo p3d plugin) for pick/place.
 
 ### On real UR5 (OnRobot 2FG7)
 
-1. **Terminal 1 – start real robot bringup** with config `ur5_4` (OnRobot 2FG7). See [Real robot setup (UR)](doc/RealRobotSetup.md) for prerequisites. Install the UR driver first: `sudo apt install -y ros-humble-ur`.
+1. **Terminal 1 – start real robot bringup** with config `ur5_4`. See [Real robot setup (UR)](doc/RealRobotSetup.md). Install the UR driver first: `sudo apt install -y ros-humble-ur`.
 
    ```console
    source /opt/ros/humble/setup.bash
-   source ~/dev_ws/install/setup.bash
+   source ~/clair-pick-and-place-ros2/install/setup.bash
    ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
    ```
 
-2. **Terminal 2 – run the Hanoi demo** (same sourcing). On real hardware you must use **`--skip_spawn`** (no Gazebo); the table and cubes are physical. Object poses must be provided on **`/object_poses/<name>`** (`nav_msgs/Odometry`), e.g. from a perception node publishing `/object_poses/cube_0`, `/object_poses/cube_1`, etc., or adapt the demo to use fixed positions.
+2. **Terminal 2 – run the Hanoi demo.** On real hardware use **`--skip_spawn`**. Object poses must be on **`/object_poses/<name>`** (`nav_msgs/Odometry`).
 
    ```console
    ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3 --skip_spawn
@@ -178,6 +292,23 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
 
    Adjust table/peg positions (`--table_x`, `--table_y`, `--peg_spacing`, etc.) to match your cell.
 
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `Package 'ros2srrc_execution' not found` | `source ~/.bashrc` or `source ~/clair-pick-and-place-ros2/install/setup.bash` |
+| `move_group_interface_improved.h: No such file` | Run the [MoveIt header patch](#3-moveit-header-patch-required-once) |
+| `MoveG:FAILED. Reason -> none` on gripper close | Restart sim after rebuilding; ensure gripper controllers load (launch files use installed `ros2srrc_endeffectors` paths, not `~/dev_ws`) |
+| Orange ghost robot in RViz at home pose | MoveIt goal-state overlay; disabled in current RViz configs—restart `./launch_sim.sh` |
+| Two robots in RViz | One is the real/sim robot; the other was MoveIt's goal preview (see above). Gazebo window shows the same sim robot separately. |
+| Pick fails on stacked cubes (`INVALID_MOTION_PLAN`) | Only the **target** cube is removed from MoveIt during pick; other cubes stay for collision planning. Try `--peg_spacing 0.25` for 5+ cubes. |
+| Apt `Signed-By` conflict for ROS repo | Remove duplicate `ros2.list`; keep `ros2.sources` ([Installation](#1-ros-2-humble-and-system-packages)) |
+
+During pick, only the cube being grasped is temporarily removed from the MoveIt planning scene so the gripper can descend; all other cubes remain so paths avoid neighboring stacks.
+
+Detailed VM testing notes: `src/ros2_SimRealRobotControl/TESTING_GUIDE_ROS2_VM.md`.
 
 ---
 

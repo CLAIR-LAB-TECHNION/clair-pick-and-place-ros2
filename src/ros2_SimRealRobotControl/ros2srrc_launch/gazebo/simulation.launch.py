@@ -74,12 +74,14 @@ def GetCONFIG(CONFIGURATION, PKG_PATH):
     return(RESULT)
 
 # GET EE-Controllers LIST:
+def _ee_config_dir(EEName):
+    return os.path.join(get_package_share_directory('ros2srrc_endeffectors'), EEName, 'config')
+
 def GetEEctr(EEName):
     
     RESULT = []
 
-    PATH = os.path.join(os.path.expanduser('~'), 'dev_ws', 'src', 'ros2_SimRealRobotControl', 'ros2srrc_endeffectors', EEName, 'config')
-    YAML_PATH = PATH + "/controller_moveit2.yaml"
+    YAML_PATH = os.path.join(_ee_config_dir(EEName), "controller_moveit2.yaml")
     
     with open(YAML_PATH, 'r') as YAML:
         cYAML = yaml.safe_load(YAML)
@@ -92,8 +94,7 @@ def GetEEctr(EEName):
 # CHECK if CONTROLLER file exists for EE:
 def EEctrlEXISTS(EEName):
     
-    PATH = os.path.join(os.path.expanduser('~'), 'dev_ws', 'src', 'ros2_SimRealRobotControl', 'ros2srrc_endeffectors', EEName, 'config')
-    YAML_PATH = PATH + "/controller.yaml"
+    YAML_PATH = os.path.join(_ee_config_dir(EEName), "controller.yaml")
     
     RES = os.path.exists(YAML_PATH)
     return(RES)

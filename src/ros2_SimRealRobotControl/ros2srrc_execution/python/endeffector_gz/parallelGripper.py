@@ -482,69 +482,10 @@ class parallelGR():
                 if AttRES:
                     print("[CLIENT - parallelGripper.py]: Object " + objNAME + " attached.")
                     
-                    # Remove object from MoveIt's collision scene to prevent collision errors
-                    # when closing the gripper (the object is now attached to the gripper)
+                    # Remove only the attached object from MoveIt (other stacks stay for collision planning)
                     self.moveit_scene_manager.remove_from_moveit(objNAME)
-                    
-                    # Get all collision objects with poses from MoveIt planning scene
-                    all_objects = self.moveit_scene_manager.get_all_collision_objects()
-                    # print(f"[CLIENT - parallelGripper.py]: Found {len(all_objects)} objects in MoveIt scene: {list(all_objects.keys())}")  # DEBUG
-                    # print(f"[CLIENT - parallelGripper.py]: EE Pose: x={EEPose.x:.3f}, y={EEPose.y:.3f}, z={EEPose.z:.3f}")  # DEBUG
-                    
-                    # Remove nearby objects (e.g., objects in a stack) to prevent collision errors
-                    # when closing the gripper. The objects remain in Gazebo for physics.
-                    # We check for objects both above and below, and also nearby horizontally.
-                    nearby_removed = []
-                    
-                    # Check objects from pose topics first (more accurate, real-time)
-                    for x in Objects:
-                        if x.objectname != objNAME and x.objectname in all_objects:
-                            # Check if object is nearby (within 0.25m horizontally and within 0.25m vertically)
-                            horizontal_dist = ((EEPose.x - x.x)**2 + (EEPose.y - x.y)**2)**0.5
-                            vertical_diff = abs(EEPose.z - x.z)  # Absolute vertical distance
-                            
-                            # If object is within 0.25m horizontally and within 0.25m vertically, remove it
-                            # This handles both stacked objects (above/below) and nearby objects
-                            if horizontal_dist < 0.25 and vertical_diff < 0.25:
-                                # print(f"[CLIENT - parallelGripper.py]: Removing nearby object {x.objectname} from MoveIt scene (stacked/nearby)...")  # DEBUG
-                                self.moveit_scene_manager.remove_from_moveit(x.objectname)
-                                nearby_removed.append(x.objectname)
-                    
-                    # Also check objects from MoveIt scene (for objects without pose topics)
-                    for obj_name, obj_pose in all_objects.items():
-                        if obj_name != objNAME and obj_name not in nearby_removed:
-                            if obj_pose is not None:
-                                # Check if object is nearby using MoveIt scene pose
-                                horizontal_dist = ((EEPose.x - obj_pose['x'])**2 + (EEPose.y - obj_pose['y'])**2)**0.5
-                                vertical_diff = abs(EEPose.z - obj_pose['z'])  # Absolute vertical distance
-                                
-                                # print(f"[CLIENT - parallelGripper.py]: Checking {obj_name}: h_dist={horizontal_dist:.3f}m, v_dist={vertical_diff:.3f}m, pose=({obj_pose['x']:.3f}, {obj_pose['y']:.3f}, {obj_pose['z']:.3f})")  # DEBUG
-                                
-                                # If object is within 0.25m horizontally and within 0.25m vertically, remove it
-                                # This handles both stacked objects (above/below) and nearby objects
-                                if horizontal_dist < 0.25 and vertical_diff < 0.25:
-                                    # print(f"[CLIENT - parallelGripper.py]: Removing nearby object {obj_name} from MoveIt scene (stacked/nearby, from scene)...")  # DEBUG
-                                    self.moveit_scene_manager.remove_from_moveit(obj_name)
-                                    nearby_removed.append(obj_name)
-                                else:
-                                    # print(f"[CLIENT - parallelGripper.py]: Object {obj_name} is too far (h={horizontal_dist:.3f}m, v={vertical_diff:.3f}m), not removing")  # DEBUG
-                                    pass
-                            else:
-                                # Pose is None (e.g. stale or missing in scene). Do NOT remove - we cannot
-                                # know if the object is nearby; removing would wrongly remove cubes on
-                                # other pegs/positions (only the picked cube should be removed).
-                                pass
-                    
-                    # Only the picked object (objNAME) and objects actually within 0.25m have been
-                    # removed. We do NOT remove all other cubes - that would clear MoveIt of cubes
-                    # on other pegs when picking one cube.
-                    
-                    # Brief wait for MoveIt to process removals
-                    if nearby_removed:
-                        time.sleep(0.25)  # Multiple objects removed
-                    else:
-                        time.sleep(0.15)
-                    
+                    time.sleep(0.15)
+
                     print("[CLIENT - parallelGripper.py]: Now closing gripper.")
                     print("")
                 else:
