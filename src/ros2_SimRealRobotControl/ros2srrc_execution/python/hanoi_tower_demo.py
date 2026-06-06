@@ -16,7 +16,7 @@ Usage:
 
 Features:
 - Configurable number of cubes (1-8 recommended)
-- Automatic peg positioning
+- Pegs on robot stand surface, spaced along Y near the bottom (+X) edge
 - Recursive Tower of Hanoi solver
 - Visual progress tracking
 - Move counting and statistics
@@ -31,6 +31,16 @@ from ament_index_python.packages import get_package_share_directory
 
 # Add path for imports
 sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 'python'))
+
+# Robot stand geometry (matches robot_stand link in ros2srrc_ur5 URDF xacro files).
+# The stand is spawned with the robot at launch; Hanoi cubes are placed on its top surface.
+ROBOT_STAND_LENGTH_X = 1.844
+ROBOT_STAND_WIDTH_Y = 0.84
+ROBOT_STAND_HEIGHT_Z = 0.50
+ROBOT_STAND_CENTER_Z = 0.25
+ROBOT_STAND_SURFACE_Z = ROBOT_STAND_CENTER_Z + ROBOT_STAND_HEIGHT_Z / 2.0
+ROBOT_STAND_BOTTOM_X = ROBOT_STAND_LENGTH_X / 2.0  # +X edge
+DEFAULT_PEG_X_INSET = 0.31  # meters inward from bottom (+X) edge
 
 
 def _publish_cube_pose(name, x, y, z):
@@ -58,8 +68,8 @@ class TowerOfHanoi:
             peg_positions: List of 3 (x, y) tuples for peg positions
             cube_size_base: Base size for smallest cube (meters)
             cube_height_base: Height of each cube (meters)
-            table_z: Z position of table center (meters)
-            table_height: Height of table (meters)
+            table_z: Z position of robot stand center (meters)
+            table_height: Height of robot stand (meters)
             robot: Optional robot name for pick/place (e.g. ur5)
             ee_link: Optional EE link name for ATTACHLINK (e.g. EE_robotiq_2f85 or EE_robotiq_hande)
             ee_type: Optional end-effector type (e.g. ParallelGripper for sim, RobotiqHandE/UR for real)
@@ -68,7 +78,7 @@ class TowerOfHanoi:
         self.peg_positions = peg_positions  # [(x1, y1), (x2, y2), (x3, y3)]
         self.cube_size_base = cube_size_base
         self.cube_height_base = cube_height_base
-        self.table_surface_z = table_z + (table_height / 2)  # Top of table
+        self.table_surface_z = table_z + (table_height / 2)  # Top of robot stand
         self.robot = robot
         self.ee_link = ee_link
         self.ee_type = ee_type
@@ -116,7 +126,7 @@ class TowerOfHanoi:
         Returns:
             Z coordinate for cube center
         """
-        # Start from table surface
+        # Start from robot stand top surface
         z = self.table_surface_z
         
         # Add heights of all cubes below this position
@@ -344,7 +354,7 @@ class TowerOfHanoi:
         # Otherwise use table surface
         # Note: place.py expects z to be the target surface, and will add place_z_offset
         if stack_position == 0:
-            # Placing on table
+            # Placing on robot stand surface
             target_surface_z = self.table_surface_z
         else:
             # Placing on top of another cube - get the top surface of the cube below
@@ -600,32 +610,6 @@ class TowerOfHanoi:
         return all_successful
 
 
-def spawn_table(x, y, z, size_x=1.0, size_y=0.8, size_z=0.50):
-    """Spawn the table"""
-    cmd = [
-        "python3",
-        os.path.join(get_package_share_directory("ros2srrc_execution"), 
-                    'python', 'SpawnObjectMoveIt.py'),
-        "--package", "ros2srrc_objects",
-        "--urdf", "box.urdf.xacro",
-        "--name", "table1",
-        "--x", str(x),
-        "--y", str(y),
-        "--z", str(z),
-        "--size_x", str(size_x),
-        "--size_y", str(size_y),
-        "--size_z", str(size_z),
-        "--mass", "50.0",
-        "--color", "white"
-    ]
-    
-    try:
-        subprocess.run(cmd, check=True, timeout=15, capture_output=False, text=True)
-        return True
-    except:
-        return False
-
-
 def main():
     parser = argparse.ArgumentParser(
         description='Tower of Hanoi demo with robot manipulation',
@@ -644,15 +628,15 @@ Examples:
   # Real robot with Robotiq gripper
   python3 hanoi_tower_demo.py --ee_type RobotiqHandE/UR --ee_link EE_robotiq_hande --robot ur5
   
-  # Real robot: skip spawn, physical setup, known poses (no perception needed)
+  # Real robot: skip cube spawn, physical setup, known poses (no perception needed)
   python3 hanoi_tower_demo.py --ee_type RobotiqHandE/UR --ee_link EE_robotiq_hande --skip_spawn \\
-    --table_z 0.25 --peg_spacing 0.20 --cube_size_base 0.05 --initial_state "0:0,1,2;1:;2:"
+    --stand_z 0.25 --peg_spacing 0.20 --cube_size_base 0.05 --initial_state "0:0,1,2;1:;2:"
   # Poses are computed from peg positions + stack state and published to /object_poses/<name>
   
-  # Custom peg positions
-  python3 hanoi_tower_demo.py --num_cubes 4 --peg_spacing 0.25
+  # Custom peg positions (pegs run along Y near the stand bottom/+X edge)
+  python3 hanoi_tower_demo.py --num_cubes 4 --peg_spacing 0.25 --peg_x 0.612 --peg_center_y 0.0
   
-  # Skip spawning (use existing setup)
+  # Skip spawning cubes (robot stand is already present from MoveIt/Gazebo launch)
   python3 hanoi_tower_demo.py --num_cubes 3 --skip_spawn
         """
     )
@@ -661,16 +645,18 @@ Examples:
                         help='Number of cubes (1-8 recommended, default: 3)')
     parser.add_argument('--num_disks', type=int, default=None,
                         help='DEPRECATED: Use --num_cubes instead. Number of cubes (1-8 recommended)')
-    parser.add_argument('--table_x', type=float, default=0.0,
-                        help='Table X position (default: 0.0)')
-    parser.add_argument('--table_y', type=float, default=0.48,
-                        help='Table Y position (default: 0.48)')
-    parser.add_argument('--table_z', type=float, default=0.25,
-                        help='Table Z position (default: 0.25)')
+    parser.add_argument('--stand_z', type=float, default=ROBOT_STAND_CENTER_Z,
+                        help='Robot stand center Z in meters (default: 0.25)')
+    parser.add_argument('--table_z', type=float, default=None,
+                        help='DEPRECATED: use --stand_z instead')
     parser.add_argument('--peg_spacing', type=float, default=0.20,
-                        help='Spacing between pegs in meters (default: 0.20)')
-    parser.add_argument('--peg_y', type=float, default=None,
-                        help='Y position for all pegs (default: table_y + 0.10)')
+                        help='Spacing between pegs along Y in meters (default: 0.20)')
+    parser.add_argument('--peg_x', type=float, default=None,
+                        help='X position for all pegs near bottom (+X) edge (default: bottom edge minus --peg_x_inset)')
+    parser.add_argument('--peg_center_y', type=float, default=0.0,
+                        help='Center Y position for the three pegs (default: 0.0)')
+    parser.add_argument('--peg_x_inset', type=float, default=DEFAULT_PEG_X_INSET,
+                        help=f'Distance from bottom (+X) edge when --peg_x is not set (default: {DEFAULT_PEG_X_INSET})')
     parser.add_argument('--cube_size_base', type=float, default=0.05,
                         help='Base size for smallest cube in meters (default: 0.05)')
     parser.add_argument('--cube_height', type=float, default=0.05,
@@ -680,7 +666,7 @@ Examples:
     parser.add_argument('--disk_height', type=float, default=None,
                         help='DEPRECATED: Use --cube_height instead')
     parser.add_argument('--skip_spawn', action='store_true',
-                        help='Skip spawning table and cubes (use existing setup)')
+                        help='Skip spawning cubes (robot stand comes from MoveIt/Gazebo launch)')
     parser.add_argument('--robot', type=str, default=None,
                         help='Robot name for pick/place (e.g. ur5). If not set, scripts use their default.')
     parser.add_argument('--ee_type', type=str, default=None,
@@ -708,18 +694,18 @@ Examples:
         print("ERROR: Number of cubes must be between 1 and 8")
         return 1
     
-    # Calculate peg positions
-    if args.peg_y is None:
-        peg_y = args.table_y + 0.10
-    else:
-        peg_y = args.peg_y
-    
-    # Three pegs spaced evenly
-    peg_center_x = args.table_x
+    stand_z = args.stand_z if args.table_z is None else args.table_z
+    if args.table_z is not None:
+        print("WARNING: --table_z is deprecated, use --stand_z instead")
+
+    peg_x = args.peg_x if args.peg_x is not None else (ROBOT_STAND_BOTTOM_X - args.peg_x_inset)
+    peg_center_y = args.peg_center_y
+
+    # Three pegs in a line along Y, fixed X near the stand bottom (+X) edge
     peg_positions = [
-        (peg_center_x - args.peg_spacing, peg_y),  # Peg 0 (left)
-        (peg_center_x, peg_y),                     # Peg 1 (center)
-        (peg_center_x + args.peg_spacing, peg_y),  # Peg 2 (right)
+        (peg_x, peg_center_y - args.peg_spacing),  # Peg 0
+        (peg_x, peg_center_y),                     # Peg 1 (center)
+        (peg_x, peg_center_y + args.peg_spacing),  # Peg 2
     ]
     
     # Calculate expected number of moves: 2^n - 1
@@ -734,20 +720,14 @@ Examples:
     print(f"  EE type: {args.ee_type or 'ParallelGripper (default)'}")
     print(f"  EE link: {args.ee_link or '(default)'}")
     print(f"  Robot: {args.robot or '(default)'}")
-    print(f"  Table position: ({args.table_x}, {args.table_y}, {args.table_z})")
-    print(f"  Peg spacing: {args.peg_spacing}m, cube size base: {cube_size_base}m")
+    print(f"  Playing surface: robot stand (top Z={ROBOT_STAND_SURFACE_Z:.3f}m)")
+    print(f"  Stand center Z: {stand_z:.3f}m")
+    print(f"  Peg line X: {peg_x:.3f}m (near bottom/+X edge), center Y: {peg_center_y:.3f}m")
+    print(f"  Peg spacing (Y): {args.peg_spacing}m, cube size base: {cube_size_base}m")
     print(f"  Peg positions:")
     for i, (x, y) in enumerate(peg_positions):
         print(f"    Peg {i}: ({x:.3f}, {y:.3f})")
     print("")
-    
-    # Spawn table
-    if not args.skip_spawn:
-        print("Spawning table...")
-        if not spawn_table(args.table_x, args.table_y, args.table_z):
-            print("\n✗ FAILED: Could not spawn table")
-            return 1
-        time.sleep(0.2)
     
     # Initialize puzzle
     hanoi = TowerOfHanoi(
@@ -755,8 +735,8 @@ Examples:
         peg_positions=peg_positions,
         cube_size_base=cube_size_base,
         cube_height_base=cube_height,
-        table_z=args.table_z,
-        table_height=0.50,
+        table_z=stand_z,
+        table_height=ROBOT_STAND_HEIGHT_Z,
         robot=args.robot,
         ee_link=args.ee_link,
         ee_type=args.ee_type
