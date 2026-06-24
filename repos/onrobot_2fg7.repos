@@ -1,0 +1,9 @@
+repositories:
+  onrobot_2fg7_interfaces:
+    type: git
+    url: https://github.com/davedovrat/onrobot_2fg7_interfaces.git
+    version: main
+  onrobot_2fg7:
+    type: git
+    url: https://github.com/davedovrat/onrobot_2fg7.git
+    version: main

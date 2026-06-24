@@ -78,7 +78,7 @@ def spawn_table(x, y, z):
         "--z", str(z),
         "--size_x", "1.0",
         "--size_y", "0.8",
-        "--size_z", "0.50",
+        "--size_z", "0.84",
         "--mass", "50.0",
         "--color", "white"
     ]
@@ -140,7 +140,7 @@ def main():
     )
     parser.add_argument('--table_x', type=float, default=0.0, help='Table X (default: 0.0)')
     parser.add_argument('--table_y', type=float, default=0.48, help='Table Y (default: 0.48)')
-    parser.add_argument('--table_z', type=float, default=0.25, help='Table Z (default: 0.25)')
+    parser.add_argument('--table_z', type=float, default=0.42, help='Table center Z (default: 0.42; top at 0.84 m)')
     parser.add_argument('--cubes_x', type=float, default=0.13, help='Initial stack X (default: 0.13)')
     parser.add_argument('--cubes_y', type=float, default=0.54, help='Initial stack Y (default: 0.54)')
     parser.add_argument('--place_x', type=float, default=0.15, help='Place stack X (default: 0.15)')
@@ -148,7 +148,7 @@ def main():
     parser.add_argument('--skip_spawn', action='store_true', help='Skip spawning table and cubes')
     args = parser.parse_args()
 
-    table_surface_z = args.table_z + 0.25  # Top of table
+    table_surface_z = args.table_z + 0.42  # Top of table (0.84 m with default center)
 
     # Initial stack: bottom = big, middle = medium, top = small (center Z for each)
     z_big = table_surface_z + (SIZE_BIG / 2)

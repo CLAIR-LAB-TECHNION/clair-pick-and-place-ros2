@@ -32,9 +32,9 @@ Configurations:
     ee_driver: "RobotiqHandE/UR"
     ee_link: "EE_robotiq_hande"
 
-  # ur5_4: Real UR5 + OnRobot 2FG7. Robot description (URDF) intentionally uses 2F-85
-  # geometry for planning, collision, and RViz; physical gripper is 2FG7, controlled via
-  # the OnRobot backend (ee_driver: onrobot_2fg7). See README "Primary use cases".
+  # ur5_4: Real UR5 + OnRobot 2FG7 via XML-RPC (davedovrat/onrobot_2fg7 on robot port 41414).
+  # Requires OnRobot 2FG7 URCap on the teach pendant (not RS485 Tool Comm).
+  # Robot description (URDF) uses Robotiq 2F-85 geometry for MoveIt planning/collision.
   - ID: "ur5_4"
     Name: "UR5 + OnRobot 2FG7 gripper on top of Robot Stand."
     urdf: "ur5_robotiq_2f85.urdf.xacro"

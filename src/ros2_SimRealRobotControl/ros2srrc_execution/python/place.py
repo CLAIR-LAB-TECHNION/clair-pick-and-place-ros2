@@ -4,20 +4,20 @@
 place.py - Automated Place Action
 
 Automatically places an object at specified coordinates. All parameters are determined automatically:
-- Place location is specified by x, y coordinates (z defaults to 0.50 if not provided)
+- Place location is specified by x, y coordinates (z defaults to 0.865 if not provided)
 - Place parameters are automatically calculated based on location
 - Gripper orientation is automatically determined
 
 Usage:
     ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48
-    ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48 z:=0.50
+    ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48 z:=0.865
     
 Required arguments:
     x:=<value>                  X coordinate of place location (meters)
     y:=<value>                  Y coordinate of place location (meters)
     
 Optional arguments:
-    z:=<value>                  Z coordinate of place location (meters, default: 0.50)
+    z:=<value>                  Z coordinate of place location (meters, default: 0.865)
     object:=<name>              Object name to detach (e.g., cube1) - required if object is attached
     robot:=ur5                  Robot name (default: ur5)
     ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)
@@ -66,7 +66,7 @@ def AssignArgument(ARGUMENT):
 
 def main(args=None):
     """
-    Automated Place action - requires x, y coordinates (z defaults to 0.50).
+    Automated Place action - requires x, y coordinates (z defaults to 0.865).
     """
     
     rclpy.init(args=args)
@@ -92,21 +92,21 @@ def main(args=None):
         print("")
         print("Example:")
         print("  ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48")
-        print("  ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48 z:=0.50")
+        print("  ros2 run ros2srrc_execution place.py x:=0.15 y:=0.48 z:=0.865")
         print("")
         print("Required arguments:")
         print("  x:=<value>                  X coordinate of place location (meters)")
         print("  y:=<value>                  Y coordinate of place location (meters)")
         print("")
         print("Optional arguments:")
-        print("  z:=<value>                  Z coordinate of place location (meters, default: 0.50)")
+        print("  z:=<value>                  Z coordinate of place location (meters, default: 0.865)")
         print("  object:=<name>               Object name to detach (e.g., cube1) - recommended if object is attached)")
         print("  robot:=ur5                  Robot name (default: ur5)")
         print("  ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)")
         print("  ee_link:=EE_robotiq_2f85    End-effector link (default: EE_robotiq_2f85)")
         print("  approach_height:=0.15       Approach height in meters (default: 0.15)")
-        print("  place_z_offset:=0.07         Place Z offset (default: 0.07 when cube_size not set; min 0.06 to avoid table collision)")
-        print("  cube_size:=<value>          Cube size in meters (if provided, offset = size/2 + 0.07m gripper clearance)")
+        print("  place_z_offset:=-0.05       Offset from target z (+ up, - down; default -0.05 when z is cube center)")
+        print("  cube_size:=<value>          Cube width in meters (uses place_z_offset=-0.03 if z is center)")
         print("")
         print("Closing program... BYE!")
         rclpy.shutdown()
@@ -115,7 +115,7 @@ def main(args=None):
     # ===== PARSE OPTIONAL ARGUMENTS ===== #
     z = AssignArgument("z")
     if z is None:
-        z = "0.50"  # Default z value
+        z = "0.865"  # Default z: 5 cm cube center on 0.84 m tabletop
     
     object_name = AssignArgument("object")  # Object name for detachment
     robot = AssignArgument("robot") or "ur5"
@@ -124,30 +124,42 @@ def main(args=None):
     
     approach_height = float(AssignArgument("approach_height") or "0.15")
     
-    # Get cube size if provided (for dynamic offset calculation)
     cube_size = AssignArgument("cube_size")
-    
-    # Minimum height above target surface so gripper fingers don't collide with table
-    MIN_PLACE_Z_OFFSET = 0.06   # 6 cm minimum above surface
-    DEFAULT_PLACE_Z_OFFSET = 0.07   # 7 cm default
+    place_z_arg = AssignArgument("place_z_offset")
+    extra_descend_arg = AssignArgument("place_extra_descend_m")
+    place_center_z_arg = AssignArgument("place_center_z")
+    _is_2fg7 = ee_type == "onrobot_2fg7"
 
-    # Calculate place_z_offset dynamically based on cube size
-    # If cube_size is provided, use: cube_height/2 + gripper_clearance
-    # The gripper clearance is needed because the gripper fingers are below the cube
-    # when holding it, so we need extra space to avoid collision
-    if cube_size:
-        cube_height = float(cube_size)
-        # Gripper clearance: 0.07m (7cm) so gripper fingers don't hit table/surface below
-        gripper_clearance = 0.07
-        place_z_offset = (cube_height / 2.0) + gripper_clearance
+    support_cubes_arg = AssignArgument("support_cubes")
+    support_cube_names = [
+        s.strip() for s in support_cubes_arg.split(",") if s.strip()
+    ] if support_cubes_arg else []
+    support_sizes_arg = AssignArgument("support_cube_sizes")
+    support_cube_sizes = {}
+    if support_sizes_arg:
+        for pair in support_sizes_arg.split(","):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                support_cube_sizes[k.strip()] = float(v.strip())
+
+    # Target z is cube CENTER (same as pick / MoveIt). Negative offset = lower release in planner.
+    _default_place_z = "-0.05" if _is_2fg7 else "-0.01"
+    if place_z_arg is not None:
+        place_z_offset = float(place_z_arg)
+    elif cube_size and place_center_z_arg is None:
+        # Keep MoveIt target shallow — table stand collision blocks deeper planner descent
+        place_z_offset = -0.01
+        print(f"[Place]: cube_size:={cube_size} with center z — place_z_offset={place_z_offset:.3f}m")
     else:
-        place_z_offset = float(AssignArgument("place_z_offset") or str(DEFAULT_PLACE_Z_OFFSET))
+        place_z_offset = float(_default_place_z)
         print(f"[Place]: Using default place_z_offset: {place_z_offset:.3f}m")
 
-    # Enforce minimum so gripper never descends into table
-    if place_z_offset < MIN_PLACE_Z_OFFSET:
-        place_z_offset = MIN_PLACE_Z_OFFSET
-        print(f"[Place]: Enforcing minimum place_z_offset: {place_z_offset:.3f}m (avoids table collision)")
+    if extra_descend_arg is not None:
+        place_extra_descend_m = float(extra_descend_arg)
+    else:
+        place_extra_descend_m = 0.0
+    if place_extra_descend_m > 0.001:
+        print(f"[Place]: place_extra_descend_m:={place_extra_descend_m:.3f}m (physical MoveL after MoveIt place pose)")
     
     # Create place location pose from coordinates
     place_pose = Robpose()
@@ -217,7 +229,7 @@ def main(args=None):
         else:
             EEClient = vacuumGR(["place_object"], robot, ee_link)
             print("Loaded -> VacuumGripper (will automatically detect and detach attached object).")
-    elif ee_type in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+    elif ee_type in ("ParallelGripper", "onrobot_ros2", "onrobot_2fg7"):
         sys.path.append(PATH)
         from endeffector.gripper_factory import create_gripper
         obj_list = [object_name] if object_name else ["place_object"]
@@ -265,7 +277,7 @@ def main(args=None):
     
     # Brief wait for MoveIt!2 planning scene (reduced from 1.0s for faster startup)
     print("[Place]: Waiting for MoveIt!2 planning scene to initialize...")
-    time.sleep(0.3)
+    #time.sleep(0.3)
     print("[Place]: System ready!")
     print("")
     
@@ -277,25 +289,19 @@ def main(args=None):
     print("Executing Automated Place action...")
     print("")
     
-    # Calculate post_open_push_down based on whether we used dynamic offset
-    # If we used dynamic offset with gripper clearance, we need to push down by that amount
-    # Otherwise use default 5mm
-    if cube_size:
-        # Push down by gripper clearance to settle cube on surface
-        gripper_clearance = 0.02  # Must match the gripper_clearance used above
-        post_open_push_down = gripper_clearance
-    else:
-        post_open_push_down = 0.005  # 5mm default
-    
-    # Re-add object to MoveIt scene after place (object_name + size) so next pick gets correct gripper close %
     cube_size_for_scene = float(cube_size) if cube_size else 0.05
-    
+    place_center_z = float(place_center_z_arg) if place_center_z_arg is not None else None
+
     config = {
         "approach_height": approach_height,
         "place_z_offset": place_z_offset,
-        "post_open_push_down_m": post_open_push_down,  # Push down after opening to settle cube on surface
-        "object_name": object_name,                      # If set, re-add to scene after place for next pick
+        "place_extra_descend_m": place_extra_descend_m,
+        "object_name": object_name,
         "cube_size_for_scene": cube_size_for_scene,
+        "place_z_is_cube_center": cube_size is not None and place_center_z is None,
+        "place_center_z": place_center_z,
+        "support_cube_names": support_cube_names,
+        "support_cube_sizes": support_cube_sizes,
     }
     
     PlaceAction = Place(RobotClient, EEClient, config)

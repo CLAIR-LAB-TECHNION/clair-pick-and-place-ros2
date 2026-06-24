@@ -156,6 +156,7 @@ install(PROGRAMS
   python/hanoi_publish_pose.py
   python/test_stacked_cubes.py
   python/upside_down_test.py
+  python/test_onrobot_ros2_connectivity.py
   python/test_2fg7_connectivity.py
   python/onrobot_2fg7_params_node.py
   python/robotiq_85_joint_state_publisher.py

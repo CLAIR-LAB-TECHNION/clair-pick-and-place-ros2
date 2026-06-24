@@ -36,7 +36,7 @@ Sequence:
     Input:
       x: 0.15
       y: 0.48
-      z: 0.50
+      z: 0.865
       qx: -0.5
       qy: 0.5
       qz: 0.5
@@ -56,7 +56,7 @@ Sequence:
     Input:
       x: -0.15
       y: 0.48
-      z: 0.53
+      z: 0.865
       qx: -0.5
       qy: 0.5
       qz: 0.5

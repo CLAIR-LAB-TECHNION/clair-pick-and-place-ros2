@@ -207,6 +207,8 @@ def generate_launch_description():
     robot_description = {'robot_description': robot_description_config}
 
     # ROBOT STATE PUBLISHER NODE:
+    # TF tree comes from URDF (world -> robot_stand -> base_link). Do NOT add a static
+    # world->base_link transform; it conflicts with the stand chain and desyncs RViz from Gazebo.
     node_robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -215,13 +217,6 @@ def generate_launch_description():
             robot_description,
             {"use_sim_time": True}
         ]
-    )
-    static_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_transform_publisher",
-        output="log",
-        arguments=["0.0", "0.0", "0.0", "0.0", "0.0", "0.0", "world", "base_link"],
     )
 
     # SPAWN ROBOT TO GAZEBO:
@@ -419,7 +414,6 @@ def generate_launch_description():
         LD.add_action(set_linkattacher_env)
     LD.add_action(gazebo)
     LD.add_action(node_robot_state_publisher)
-    LD.add_action(static_tf)
     LD.add_action(spawn_entity)
 
     LD.add_action(RegisterEventHandler(

@@ -47,7 +47,7 @@ except ImportError:
     class vgrABB:
         pass
 
-# UR end-effectors: use gripper factory (robotiq_2f85, onrobot_2fg7, ParallelGripper)
+# UR end-effectors: use gripper factory (onrobot_ros2, ParallelGripper)
 # RobotiqGRIPPER retained only for backward compat in step dispatch
 
 # IMPORT ROS2 Custom Messages:
@@ -179,7 +179,7 @@ def main(args=None):
     elif seqRES["EEType"] == "VacuumGripper":
         EEClient = vacuumGR(seqRES["Objects"], seqRES["Robot"], seqRES["EELink"])
         print("Loaded -> VacuumGripper.")
-    elif seqRES["EEType"] in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+    elif seqRES["EEType"] in ("ParallelGripper", "onrobot_ros2", "onrobot_2fg7"):
         from endeffector.gripper_factory import create_gripper
         EEClient = create_gripper(
             seqRES["EEType"], seqRES["Robot"], seqRES["EELink"], seqRES["Objects"]
@@ -359,7 +359,7 @@ def main(args=None):
                 else:
                     RES = EEClient.DEACTIVATE()
 
-            elif x["Type"] in ("RobotiqHandE/UR", "robotiq_2f85", "onrobot_2fg7"):
+            elif x["Type"] in ("onrobot_ros2", "onrobot_2fg7"):
                 if x["Action"] == "CLOSE":
                     val = x.get("Value", 100)
                     percent = float(val) / 100.0 if val is not None else 1.0
@@ -427,7 +427,7 @@ def main(args=None):
             delay_s = float(x.get("Delay", 0.0))
             if delay_s > 0.0:
                 print("Requested a waitTime of " + str(delay_s) + " seconds.")
-                time.sleep(delay_s)
+                #time.sleep(delay_s)
                 print("")
                 
         except KeyboardInterrupt:

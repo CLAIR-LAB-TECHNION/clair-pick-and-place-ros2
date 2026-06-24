@@ -370,21 +370,21 @@ Wait until Gazebo and RViz are up and you see MoveIt!2 ready.
 **Terminal 2 – Spawn table and cube (required for pick/place):**
 ```bash
 source ~/dev_ws/install/setup.bash
-# Spawn table (box) – center at (0, 0.48, 0.25), top surface at z ≈ 0.5 m
+# Spawn table (box) – center at (0, 0.48, 0.42), top surface at z = 0.84 m
 ros2 run ros2srrc_execution SpawnObjectMoveIt.py --package ros2srrc_objects --urdf box.urdf.xacro \
-  --name table1 --x 0.0 --y 0.48 --z 0.25 --size_x 1.0 --size_y 0.8 --size_z 0.50 --mass 50.0 --color white
-# Spawn cube on table – 5 cm cube, center at (0.15, 0.48, 0.525) so it sits on table top
+  --name table1 --x 0.0 --y 0.48 --z 0.42 --size_x 1.0 --size_y 0.8 --size_z 0.84 --mass 50.0 --color white
+# Spawn cube on table – 5 cm cube, center at (0.15, 0.48, 0.865) so it sits on table top
 ros2 run ros2srrc_execution SpawnObjectMoveIt.py --package ros2srrc_objects --urdf cube.urdf.xacro \
-  --name cube1 --x 0.15 --y 0.48 --z 0.525 --size 0.05 --color red
+  --name cube1 --x 0.15 --y 0.48 --z 0.865 --size 0.05 --color red
 ```
 
 **Terminal 2 – Pick/place (after spawn):**
 ```bash
 source ~/dev_ws/install/setup.bash
 # Pick at cube pose (ee_type=ParallelGripper by default)
-ros2 run ros2srrc_execution pick_manual.py x:=0.15 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
+ros2 run ros2srrc_execution pick_manual.py x:=0.15 y:=0.48 z:=0.865 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
 # Place at another pose
-ros2 run ros2srrc_execution place_manual.py x:=0.20 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
+ros2 run ros2srrc_execution place_manual.py x:=0.20 y:=0.48 z:=0.865 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
 ```
 Confirm no crashes and that the gripper opens/closes as expected.
 
@@ -392,7 +392,7 @@ Confirm no crashes and that the gripper opens/closes as expected.
 ```bash
 ros2 run ros2srrc_execution pick.py object:=cube1
 # Then place, e.g.:
-ros2 run ros2srrc_execution place.py x:=0.20 y:=0.48 z:=0.50
+ros2 run ros2srrc_execution place.py x:=0.20 y:=0.48 z:=0.865
 ```
 
 **Terminal 2 – Hanoi demo (full dry-run):**

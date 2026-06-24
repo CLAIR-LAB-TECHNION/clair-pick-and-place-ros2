@@ -7,7 +7,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from ros2srrc_data.msg import Robpose
+from ros2srrc_data.msg import Robpose, Action, Xyz
 
 # UR5 typical reach: cap approach/retract Z so MoveIt can find IK (high placements e.g. Hanoi stacks)
 MAX_APPROACH_Z = 1.0   # meters (world Z)
@@ -27,13 +27,18 @@ class PlaceConfig:
         """
         # Default configuration values (approach_height 0.15 matches place.py; 0.5 would be unreachable for high placements)
         self.approach_height = 0.15    # Z offset above place location for approach pose (meters)
-        self.place_z_offset = 0.07     # Z offset for place pose relative to target (meters; 7cm to avoid gripper/table collision)
-        self.approach_speed = 1.0        # Speed for approach move (0.0-1.0, already max)
-        self.descend_speed = 0.7         # Speed for descend to place (0.0-1.0; faster but still safe)
-        self.retract_speed = 0.8         # Speed for retract after place (0.0-1.0)
+        self.place_z_offset = -0.01    # MoveIt release offset relative to cube center (negative = lower)
+        self.place_extra_descend_m = 0.02  # Extra MoveL down after MoveIt place pose (real TCP below virtual z)
+        self.approach_speed = 0.5        # Speed for approach move (0.0-1.0, already max)
+        self.descend_speed = 0.3         # Speed for descend to place (0.0-1.0; faster but still safe)
+        self.retract_speed = 0.4         # Speed for retract after place (0.0-1.0)
         self.pre_open_lift_m = 0.0       # Optional upward move before opening (m); 0 = open at place height for precise drop
         self.object_name = None          # If set, object is re-added to MoveIt scene after place (for next pick size lookup)
         self.cube_size_for_scene = 0.05  # Size (m) when re-adding to scene; use real size so next pick gets correct gripper %
+        self.place_z_is_cube_center = False  # True when place_pose.z is cube center (place.py / Hanoi); else surface Z
+        self.place_center_z = None         # If set, geometric center for MoveIt scene re-add (Hanoi real robot)
+        self.support_cube_names = []       # Cubes already on destination peg (removed during descend)
+        self.support_cube_sizes = {}       # name -> size (m) for scene restore
         
         # Override defaults with provided config
         if config_dict:
@@ -41,10 +46,20 @@ class PlaceConfig:
                 self.object_name = config_dict["object_name"]
             if "cube_size_for_scene" in config_dict:
                 self.cube_size_for_scene = float(config_dict["cube_size_for_scene"])
+            if "place_z_is_cube_center" in config_dict:
+                self.place_z_is_cube_center = bool(config_dict["place_z_is_cube_center"])
+            if "place_center_z" in config_dict and config_dict["place_center_z"] is not None:
+                self.place_center_z = float(config_dict["place_center_z"])
+            if "support_cube_names" in config_dict:
+                self.support_cube_names = list(config_dict["support_cube_names"])
+            if "support_cube_sizes" in config_dict:
+                self.support_cube_sizes = dict(config_dict["support_cube_sizes"])
             if "approach_height" in config_dict:
                 self.approach_height = float(config_dict["approach_height"])
             if "place_z_offset" in config_dict:
                 self.place_z_offset = float(config_dict["place_z_offset"])
+            if "place_extra_descend_m" in config_dict:
+                self.place_extra_descend_m = float(config_dict["place_extra_descend_m"])
             if "approach_speed" in config_dict:
                 self.approach_speed = float(config_dict["approach_speed"])
             if "descend_speed" in config_dict:
@@ -85,6 +100,118 @@ class Place:
             self.config = PlaceConfig(config)
         else:
             self.config = config
+
+        self._scene_manager = None
+        self._removed_for_descend = []
+        self._scene_prepared = False
+
+    def _get_scene_manager(self):
+        if self._scene_manager is None:
+            PATH = os.path.join(get_package_share_directory("ros2srrc_execution"), "python", "endeffector_gz")
+            sys.path.append(PATH)
+            from parallelGripper import MoveItSceneManager
+            self._scene_manager = MoveItSceneManager()
+            rclpy.spin_once(self._scene_manager, timeout_sec=0.1)
+        return self._scene_manager
+
+    def _prepare_scene_for_place(self, place_pose):
+        """Remove support cubes on destination peg from MoveIt before descend (stacked place)."""
+        support_names = list(getattr(self.config, "support_cube_names", []) or [])
+        if not support_names:
+            return
+        if self._scene_prepared:
+            return
+        mgr = self._get_scene_manager()
+        self._removed_for_descend = []
+        all_poses = mgr.get_all_collision_objects()
+
+        for name in support_names:
+            if name not in all_poses:
+                continue
+            pose = Robpose()
+            pose_data = all_poses[name]
+            pose.x = pose_data["x"]
+            pose.y = pose_data["y"]
+            pose.z = pose_data["z"]
+            size = (getattr(self.config, "support_cube_sizes", None) or {}).get(name, 0.05)
+            mgr.remove_from_moveit(name)
+            self._removed_for_descend.append((name, pose, size))
+
+        if self._removed_for_descend:
+            cleared = [n for n, _, _ in self._removed_for_descend]
+            print(f"[Place]: Cleared MoveIt collision for place (support): {', '.join(cleared)}")
+            print("")
+            #time.sleep(0.1)
+        self._scene_prepared = True
+
+    def _restore_support_cubes(self):
+        """Re-add support cubes removed for stacked place (on failure or after success)."""
+        if not self._removed_for_descend:
+            return
+        mgr = self._get_scene_manager()
+        for name, pose, size in self._removed_for_descend:
+            mgr.add_to_moveit(name, pose, size=size)
+            rclpy.spin_once(mgr, timeout_sec=0.1)
+        self._removed_for_descend = []
+        self._scene_prepared = False
+
+    def _readd_object_to_moveit(self, place_pose):
+        """Re-add placed cube to MoveIt so the next pick can read pose/size from the scene."""
+        obj_name = getattr(self.config, "object_name", None)
+        if not obj_name:
+            return
+        size = getattr(self.config, "cube_size_for_scene", 0.05)
+        obj_center = Robpose()
+        obj_center.x = place_pose.x
+        obj_center.y = place_pose.y
+        if getattr(self.config, "place_center_z", None) is not None:
+            obj_center.z = self.config.place_center_z
+        elif getattr(self.config, "place_z_is_cube_center", False):
+            obj_center.z = place_pose.z
+        else:
+            obj_center.z = place_pose.z + (size / 2.0)
+        obj_center.qx = place_pose.qx
+        obj_center.qy = place_pose.qy
+        obj_center.qz = place_pose.qz
+        obj_center.qw = place_pose.qw
+
+        if self.gripper_client is not None and hasattr(self.gripper_client, "add_object_to_planning_scene"):
+            self.gripper_client.add_object_to_planning_scene(obj_name, obj_center, size=size)
+        else:
+            mgr = self._get_scene_manager()
+            mgr.add_to_moveit(obj_name, obj_center, size=size)
+            rclpy.spin_once(mgr, timeout_sec=0.1)
+        print(f"[Place]: Re-added {obj_name} to MoveIt scene (size={size:.3f}m, z={obj_center.z:.3f}m) for next pick.")
+
+    def _place_extra_descend(self, extra_m=None):
+        """Relative MoveL down after MoveIt place pose (real table is below virtual MoveIt z)."""
+        extra = self.config.place_extra_descend_m if extra_m is None else float(extra_m)
+        if extra <= 0.001:
+            return {"Success": True, "Message": "No extra descend."}
+        print(f"[Place]: Extra descend {extra * 1000:.0f} mm (MoveL relative, after MoveIt place pose)...")
+        step_m = 0.01
+        descended = 0.0
+        descend_speed = max(0.12, self.config.descend_speed * 0.5)
+        while descended + 1e-6 < extra:
+            d = min(step_m, extra - descended)
+            action = Action()
+            action.action = "MoveL"
+            action.speed = descend_speed
+            delta = Xyz()
+            delta.x = 0.0
+            delta.y = 0.0
+            delta.z = -d
+            action.movel = delta
+            res = self.robot_client.Move_EXECUTE(action)
+            if not res.get("Success", False):
+                if descended < 0.001:
+                    print(f"[Place]: WARNING - Extra descend failed: {res.get('Message', 'unknown')}; opening at MoveIt height.")
+                    return {"Success": True, "Message": res.get("Message", "Extra descend failed.")}
+                print(f"[Place]: Extra descend partial: {descended * 1000:.0f} mm / {extra * 1000:.0f} mm ({res.get('Message', 'unknown')})")
+                return {"Success": True, "Message": f"Partial extra descend ({descended * 1000:.0f} mm)."}
+            descended += d
+        print(f"[Place]: Extra descend complete ({descended * 1000:.0f} mm).")
+        return {"Success": True, "Message": f"Extra descend {descended * 1000:.0f} mm."}
     
     def _calculate_poses(self, place_pose):
         """
@@ -96,11 +223,11 @@ class Place:
         Returns:
             tuple: (approach_pose, place_pose_calc, retract_pose) as Robpose messages
         """
-        # Place pose: at place height (slightly above place location center); go down 1 cm more for reliable release
+        # Place pose: target center + offset (+ up, - down)
         place_pose_calc = Robpose()
         place_pose_calc.x = place_pose.x
         place_pose_calc.y = place_pose.y
-        place_pose_calc.z = place_pose.z + self.config.place_z_offset - 0.01
+        place_pose_calc.z = place_pose.z + self.config.place_z_offset
         place_pose_calc.qx = place_pose.qx
         place_pose_calc.qy = place_pose.qy
         place_pose_calc.qz = place_pose.qz
@@ -235,6 +362,9 @@ class Place:
         
         print("[Place]: Step 1/4 - Approach pose reached successfully.")
         print("")
+
+        # Remove support cubes below place height so gripper+payload can descend on stacks
+        self._prepare_scene_for_place(place_pose)
         
         # ===== STEP 2: Descend to place pose (LIN) ===== #
         print("[Place]: Step 2/4 - Descending to PLACE pose (LIN)...")
@@ -286,17 +416,7 @@ class Place:
         if not descend_result["Success"]:
             RES["Message"] = f"Place FAILED at Step 2 (Descend): {descend_result['Message']}"
             print(f"[Place]: {RES['Message']}")
-            # print(f"[Place]: Tried to reach place pose at: x={place_pose_calc.x:.3f}, y={place_pose_calc.y:.3f}, z={place_pose_calc.z:.3f}")  # DEBUG
-            # print(f"[Place]: This pose might be:")  # DEBUG
-            # print(f"[Place]:   1. Outside the robot's reachable workspace")  # DEBUG
-            # print(f"[Place]:   2. In a kinematic singularity")  # DEBUG
-            # print(f"[Place]:   3. Causing a collision with the environment")  # DEBUG
-            # print(f"[Place]:   4. Unreachable with the current orientation")  # DEBUG
-            # print(f"[Place]: Suggestions:")  # DEBUG
-            # print(f"[Place]:   - Try a different location (x, y)")  # DEBUG
-            # print(f"[Place]:   - Try a different z height")  # DEBUG
-            # print(f"[Place]:   - Try adjusting place_z_offset (current: {self.config.place_z_offset}m)")  # DEBUG
-            # print(f"[Place]:   - Check if the location is within the robot's workspace")  # DEBUG
+            self._restore_support_cubes()
             T_end = time.time()
             RES["ExecTime"] = round(T_end - T_start, 4)
             return RES
@@ -307,8 +427,18 @@ class Place:
         original_target_z = place_pose.z + self.config.place_z_offset
         if abs(place_pose_calc.z - original_target_z) > 0.01:
             print(f"[Place]: NOTE: Reached z={place_pose_calc.z:.3f}m (target was {original_target_z:.3f}m) due to collision avoidance.")
-            print(f"[Place]:       Object will be placed at this height.")
+            print(f"[Place]:       Object will be placed at this height unless extra descend compensates.")
         print("")
+
+        # Physical descend below MoveIt place pose (table stand collision blocks lower in planner)
+        extra_descend = self.config.place_extra_descend_m
+        collision_bump = max(0.0, place_pose_calc.z - original_target_z)
+        if collision_bump > 0.005:
+            extra_descend += collision_bump
+            print(f"[Place]: Collision avoidance raised Z by {collision_bump * 1000:.0f} mm — adding to extra descend.")
+        if extra_descend > 0.001:
+            self._place_extra_descend(extra_descend)
+            print("")
         
         # ===== Optional: small lift before open (reduces gripper-vs-cube collision) ===== #
         if self.config.pre_open_lift_m > 0.001:
@@ -327,6 +457,7 @@ class Place:
             if not lift_res["Success"]:
                 RES["Message"] = f"Place FAILED at pre-open lift: {lift_res['Message']}"
                 print(f"[Place]: {RES['Message']}")
+                self._restore_support_cubes()
                 T_end = time.time()
                 RES["ExecTime"] = round(T_end - T_start, 4)
                 return RES
@@ -350,6 +481,7 @@ class Place:
             else:
                 RES["Message"] = "Place FAILED at Step 3 (Release): Unknown gripper type"
                 print(f"[Place]: {RES['Message']}")
+                self._restore_support_cubes()
                 T_end = time.time()
                 RES["ExecTime"] = round(T_end - T_start, 4)
                 return RES
@@ -357,6 +489,7 @@ class Place:
             if not release_result["Success"]:
                 RES["Message"] = f"Place FAILED at Step 3 (Release): {release_result['Message']}"
                 print(f"[Place]: {RES['Message']}")
+                self._restore_support_cubes()
                 T_end = time.time()
                 RES["ExecTime"] = round(T_end - T_start, 4)
                 return RES
@@ -365,23 +498,6 @@ class Place:
         
         print("[Place]: Step 3/4 - Gripper opened successfully.")
         print("")
-        
-        # Re-add placed object to MoveIt planning scene so next pick can get object size (gripper close %)
-        if getattr(self.config, 'object_name', None) and self.gripper_client is not None:
-            if hasattr(self.gripper_client, 'add_object_to_planning_scene'):
-                obj_name = self.config.object_name
-                size = getattr(self.config, 'cube_size_for_scene', 0.05)
-                # Object center when sitting on surface: (place_pose.x, place_pose.y, place_pose.z + size/2)
-                obj_center = Robpose()
-                obj_center.x = place_pose.x
-                obj_center.y = place_pose.y
-                obj_center.z = place_pose.z + (size / 2.0)
-                obj_center.qx = place_pose.qx
-                obj_center.qy = place_pose.qy
-                obj_center.qz = place_pose.qz
-                obj_center.qw = place_pose.qw
-                self.gripper_client.add_object_to_planning_scene(obj_name, obj_center, size=size)
-                print(f"[Place]: Re-added {obj_name} to MoveIt scene (size={size:.3f}m) for next pick.")
         
         # ===== STEP 4: Retract (LIN) ===== #
         print("[Place]: Step 4/4 - RETRACTING (LIN)...")
@@ -411,6 +527,10 @@ class Place:
         else:
             print("[Place]: Step 4/4 - Retracted successfully.")
             print("")
+        
+        # Re-add support cubes then placed object to MoveIt after retract
+        self._restore_support_cubes()
+        self._readd_object_to_moveit(place_pose)
         
         # ===== SUCCESS ===== #
         # Place is successful if we reached step 3 (gripper opened)
@@ -448,7 +568,7 @@ def main(args=None):
     Command-line interface for Place action.
     
     Usage:
-        ros2 run ros2srrc_execution place_manual.py x:=0.15 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
+        ros2 run ros2srrc_execution place_manual.py x:=0.15 y:=0.48 z:=0.865 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5
     
     Optional arguments:
         robot:=ur5                  Robot name (default: ur5)
@@ -491,7 +611,7 @@ def main(args=None):
         print("Usage: ros2 run ros2srrc_execution place_manual.py x:=<val> y:=<val> z:=<val> qx:=<val> qy:=<val> qz:=<val> qw:=<val>")
         print("")
         print("Example:")
-        print("  ros2 run ros2srrc_execution place_manual.py x:=0.15 y:=0.48 z:=0.50 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5")
+        print("  ros2 run ros2srrc_execution place_manual.py x:=0.15 y:=0.48 z:=0.865 qx:=-0.5 qy:=0.5 qz:=0.5 qw:=0.5")
         print("")
         print("Optional arguments:")
         print("  robot:=ur5                  Robot name (default: ur5)")
@@ -499,7 +619,7 @@ def main(args=None):
         print("  ee_link:=EE_robotiq_2f85    End-effector link (default: EE_robotiq_2f85)")
         print("  objects:=cube1              Comma-separated object names (default: cube1)")
         print("  approach_height:=0.15       Approach height in meters (default: 0.15)")
-        print("  place_z_offset:=0.06        Place Z offset in meters (default: 0.06, place slightly above target)")
+        print("  place_z_offset:=-0.05       Place Z offset in meters (default: -0.05, lower release when z is cube center)")
         print("")
         print("Closing program... BYE!")
         rclpy.shutdown()
@@ -513,7 +633,7 @@ def main(args=None):
     objects = [obj.strip() for obj in objects_str.split(",")]
     
     approach_height = float(AssignArgument("approach_height") or "0.15")
-    place_z_offset = float(AssignArgument("place_z_offset") or "0.06")
+    place_z_offset = float(AssignArgument("place_z_offset") or "-0.05")
     
     # Create place location pose
     place_pose = Robpose()
@@ -561,7 +681,7 @@ def main(args=None):
         from vacuumGripper import vacuumGR  # type: ignore
         EEClient = vacuumGR(objects, robot, ee_link)
         print("Loaded -> VacuumGripper.")
-    elif ee_type in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+    elif ee_type in ("ParallelGripper", "onrobot_ros2", "onrobot_2fg7"):
         sys.path.append(PATH)
         from endeffector.gripper_factory import create_gripper
         EEClient = create_gripper(ee_type, robot, ee_link, objects)
@@ -608,7 +728,7 @@ def main(args=None):
     
     # Brief wait for MoveIt!2 planning scene (reduced from 1.0s for faster startup)
     print("[Place]: Waiting for MoveIt!2 planning scene to initialize...")
-    time.sleep(0.3)
+    #time.sleep(0.3)
     print("[Place]: System ready!")
     print("")
     

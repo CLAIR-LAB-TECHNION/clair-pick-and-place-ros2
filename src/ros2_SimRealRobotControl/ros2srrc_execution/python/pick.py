@@ -17,7 +17,8 @@ Optional arguments:
     ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)
     ee_link:=EE_robotiq_2f85    End-effector link name (default: EE_robotiq_2f85)
     approach_height:=0.22       Approach height in meters (default: 0.22, works for all cube sizes up to ~80mm)
-    grasp_z_offset:=0.04        Grasp Z offset (default: 0.04, works for all cube sizes up to ~80mm)
+    grasp_z_offset:=0.01        MoveIt grasp offset relative to object center (default 0.01 for 2FG7)
+    grasp_extra_descend_m:=0.04 Extra MoveL down after MoveIt grasp (default 0.04 for 2FG7)
     min_lift_height:=<value>    Minimum lift height above object in meters (default: None, uses approach_height)
     cube_size:=<value>          Cube size/width in meters (if provided, calculates gripper close % automatically)
     gripper_value:=50.0         Gripper close percentage (default: 50.0, ignored if cube_size provided)
@@ -42,6 +43,7 @@ import os
 import time
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from ament_index_python.packages import get_package_share_directory
 from ros2srrc_data.msg import Robpose
 from nav_msgs.msg import Odometry
@@ -52,6 +54,14 @@ from shape_msgs.msg import SolidPrimitive
 # Import the Pick class and yaw helper from pick_manual.py (gripper close % logic lives in PickConfig.get_gripper_close_percent)
 sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 'python'))
 from pick_manual import Pick, PickConfig, _quat_rotate_yaw_deg
+
+# Match hanoi_publish_pose.py (TRANSIENT_LOCAL); also compatible with Gazebo volatile publishers.
+OBJECT_POSE_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 class ObjectPoseGetter(Node):
@@ -69,7 +79,7 @@ class ObjectPoseGetter(Node):
             Odometry,
             topic_name,
             self.pose_callback,
-            10
+            OBJECT_POSE_QOS,
         )
         self.get_logger().info(f'Subscribed to {topic_name}')
     
@@ -101,6 +111,66 @@ class ObjectPoseGetter(Node):
             if self.pose_received:
                 return self.object_pose
         return None
+
+    def get_pose_from_planning_scene(self, timeout_sec=2.0):
+        """Get object center pose from MoveIt collision object (e.g. cube placed in RViz)."""
+        client = self.create_client(GetPlanningScene, '/get_planning_scene')
+        if not client.wait_for_service(timeout_sec=float(timeout_sec)):
+            self.get_logger().warn('GetPlanningScene service not available.')
+            return None
+        request = GetPlanningScene.Request()
+        request.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_NAMES | PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        )
+        future = client.call_async(request)
+        deadline = time.time() + timeout_sec
+        while not future.done() and time.time() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not future.done():
+            return None
+        try:
+            response = future.result()
+            for obj in response.scene.world.collision_objects:
+                if obj.id != self.object_name:
+                    continue
+                p = obj.pose.position
+                q = obj.pose.orientation
+                robpose = Robpose()
+                robpose.x = float(p.x)
+                robpose.y = float(p.y)
+                robpose.z = float(p.z)
+                robpose.qx = float(q.x)
+                robpose.qy = float(q.y)
+                robpose.qz = float(q.z)
+                robpose.qw = float(q.w if q.w else 1.0)
+                frame = obj.header.frame_id if obj.header.frame_id else "world"
+                self.get_logger().info(
+                    f'Pose from MoveIt planning scene ({frame}): '
+                    f'x={robpose.x:.3f}, y={robpose.y:.3f}, z={robpose.z:.3f}'
+                )
+                return robpose
+        except Exception as e:
+            self.get_logger().warn(f'Failed to get pose from planning scene: {e}')
+        return None
+
+    def list_planning_scene_object_ids(self, timeout_sec=2.0):
+        """Return collision object ids currently in MoveIt (for error hints)."""
+        client = self.create_client(GetPlanningScene, '/get_planning_scene')
+        if not client.wait_for_service(timeout_sec=float(timeout_sec)):
+            return []
+        request = GetPlanningScene.Request()
+        request.components.components = PlanningSceneComponents.WORLD_OBJECT_NAMES
+        future = client.call_async(request)
+        deadline = time.time() + timeout_sec
+        while not future.done() and time.time() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not future.done():
+            return []
+        try:
+            response = future.result()
+            return [obj.id for obj in response.scene.world.collision_objects]
+        except Exception:
+            return []
 
     def get_object_size_from_planning_scene(self, timeout_sec=2.0):
         """
@@ -193,7 +263,8 @@ def main(args=None):
         print("  ee_type:=ParallelGripper    End-effector type (default: ParallelGripper)")
         print("  ee_link:=EE_robotiq_2f85    End-effector link (default: EE_robotiq_2f85)")
         print("  approach_height:=0.22       Approach height in meters (default: 0.22, works for all cube sizes up to ~80mm)")
-        print("  grasp_z_offset:=0.04        Grasp Z offset (default: 0.04, works for all cube sizes up to ~80mm)")
+        print("  grasp_z_offset:=0.01        MoveIt grasp offset (object center + offset; default 0.01)")
+        print("  grasp_extra_descend_m:=0.04 Extra MoveL down after MoveIt grasp (default 0.04 for onrobot_2fg7)")
         print("  grasp_yaw_offset_deg:=<deg>  Extra yaw (deg) for grasp (default: 0)")
         print("  min_lift_height:=<value>    Minimum lift height above object in meters (default: None, uses approach_height)")
         print("  cube_size:=<value>          Cube size/width in meters (if provided, calculates gripper close % automatically)")
@@ -201,6 +272,7 @@ def main(args=None):
         print("  gripper_open:=0.085         Gripper open distance in meters (default: 0.085 = 85mm for Robotiq 2F-85)")
         print("  gripper_closed:=0.00        Gripper closed distance in meters (default: 0.00)")
         print("  gripper_margin:=0.002       Squeeze margin in meters (default: 0.002 = 2mm)")
+        print("  x:=<m> y:=<m> z:=<m>        Object pose (world frame); skips topic/MoveIt lookup")
         print("  pose_only:=true             Wait for pose and exit (no robot/execute); for pose-path validation.")
         print("")
         print("Closing program... BYE!")
@@ -214,15 +286,28 @@ def main(args=None):
     
     # Defaults chosen to work for all cube sizes (50mm–80mm); higher values avoid INVALID_MOTION_PLAN on descend for large cubes
     approach_height = float(AssignArgument("approach_height") or "0.22")
-    grasp_z_offset = float(AssignArgument("grasp_z_offset") or "0.04")
+    # MoveIt grasp Z (must be IK-reachable). Real cube is lower — use grasp_extra_descend_m for 2FG7.
+    _is_2fg7 = ee_type == "onrobot_2fg7"
+    grasp_z_arg = AssignArgument("grasp_z_offset")
+    extra_descend_arg = AssignArgument("grasp_extra_descend_m")
+    grasp_z_offset = float(grasp_z_arg if grasp_z_arg is not None else ("0.01" if _is_2fg7 else "0.01"))
+    grasp_extra_descend_m = float(
+        extra_descend_arg if extra_descend_arg is not None else ("0.04" if _is_2fg7 else "0.0")
+    )
     
     # Parse min_lift_height (optional, None means use approach_height)
     min_lift_height_arg = AssignArgument("min_lift_height")
     min_lift_height = float(min_lift_height_arg) if min_lift_height_arg is not None else None
+    min_approach_z_arg = AssignArgument("min_approach_z")
+    min_approach_z = float(min_approach_z_arg) if min_approach_z_arg is not None else None
+    transit_center_x_arg = AssignArgument("transit_via_center_x")
+    transit_via_center_x = float(transit_center_x_arg) if transit_center_x_arg is not None else None
     
     # Parse cube_size and gripper parameters
     cube_size_arg = AssignArgument("cube_size")
-    gripper_open = float(AssignArgument("gripper_open") or "0.085")
+    # Robotiq 2F-85 sim default 85 mm; OnRobot 2FG7 opens to ~110 mm — must match for correct gap.
+    _default_gripper_open = "0.110" if ee_type == "onrobot_2fg7" else "0.085"
+    gripper_open = float(AssignArgument("gripper_open") or _default_gripper_open)
     gripper_closed = float(AssignArgument("gripper_closed") or "0.00")
     gripper_margin = float(AssignArgument("gripper_margin") or "0.002")
     default_gripper_value = float(AssignArgument("gripper_value") or "50.0")
@@ -235,6 +320,18 @@ def main(args=None):
     fallback_enabled = _parse_bool("fallback_enabled", True)
     max_attempts = int(AssignArgument("max_attempts") or "12")
     pose_only = _parse_bool("pose_only", False)  # ROS-only test: receive pose and exit (no robot/plan/execute)
+
+    # Optional explicit pose (world frame, meters) — real robot when RViz cube / topic unavailable
+    x_arg = AssignArgument("x")
+    y_arg = AssignArgument("y")
+    z_arg = AssignArgument("z")
+    explicit_pose = None
+    if x_arg is not None and y_arg is not None and z_arg is not None:
+        explicit_pose = (float(x_arg), float(y_arg), float(z_arg))
+    elif any(a is not None for a in (x_arg, y_arg, z_arg)):
+        print("ERROR: Provide all of x:= y:= z:= together, or none.")
+        rclpy.shutdown()
+        exit(1)
 
     support_cubes_arg = AssignArgument("support_cubes")
     support_cube_names = [
@@ -258,27 +355,48 @@ def main(args=None):
     print(f"Robot: {robot}, EE Type: {ee_type}, EE Link: {ee_link}")
     print("")
     
-    # ===== GET OBJECT POSE AUTOMATICALLY ===== #
+    # ===== GET OBJECT POSE ===== #
     print("============================================================")
     print("Getting object pose automatically...")
     print("")
-    
-    pose_getter = ObjectPoseGetter(object_name)
-    
-    # Wait for pose
-    print(f"[Pick]: Waiting for object pose from /object_poses/{object_name}...")
-    object_pose = pose_getter.get_pose(timeout=5.0)
-    
-    if object_pose is None:
-        print(f"ERROR: Could not get pose for object '{object_name}'")
-        print(f"Make sure:")
-        print(f"  1. Object '{object_name}' is spawned in Gazebo")
-        print(f"  2. Topic /object_poses/{object_name} is publishing")
-        print(f"  3. Object has a pose publisher plugin")
-        print("")
-        pose_getter.destroy_node()
-        rclpy.shutdown()
-        exit(1)
+
+    object_pose = None
+    pose_getter = None
+
+    if explicit_pose is not None:
+        object_pose = Robpose()
+        object_pose.x, object_pose.y, object_pose.z = explicit_pose
+        object_pose.qx = 0.0
+        object_pose.qy = 0.0
+        object_pose.qz = 0.0
+        object_pose.qw = 1.0
+        print(f"[Pick]: Using explicit pose x:={object_pose.x}, y:={object_pose.y}, z:={object_pose.z}")
+    else:
+        pose_getter = ObjectPoseGetter(object_name)
+
+        print(f"[Pick]: Waiting for object pose from /object_poses/{object_name}...")
+        object_pose = pose_getter.get_pose(timeout=5.0)
+
+        if object_pose is None:
+            print(f"[Pick]: No pose on /object_poses/{object_name} — trying MoveIt planning scene...")
+            object_pose = pose_getter.get_pose_from_planning_scene(timeout_sec=3.0)
+
+        if object_pose is None:
+            scene_ids = pose_getter.list_planning_scene_object_ids(timeout_sec=2.0)
+            print(f"ERROR: Could not get pose for object '{object_name}'")
+            if scene_ids:
+                print(f"  MoveIt scene has: {scene_ids} (name must match object:={object_name})")
+            else:
+                print("  MoveIt planning scene is empty (RViz objects are lost after bringup restart).")
+            print("Fix options:")
+            print("  1. Pass pose directly:  pick.py object:=cube1 x:=0.15 y:=-0.12 z:=0.84 ee_type:=onrobot_2fg7 ...")
+            print("  2. Re-add cube in RViz Objects tab (name cube1) and Publish")
+            print("  3. SpawnObjectMoveIt.py --moveit-only ... OR hanoi_publish_pose.py (keep running)")
+            print("  4. pick_manual.py with x/y/z/q")
+            print("")
+            pose_getter.destroy_node()
+            rclpy.shutdown()
+            exit(1)
     
     print(f"[Pick]: Object pose retrieved successfully!")
     print(f"  Position: x={object_pose.x:.3f}, y={object_pose.y:.3f}, z={object_pose.z:.3f}")
@@ -287,9 +405,12 @@ def main(args=None):
     # Resolve cube size: from arg, or from MoveIt planning scene, or default (same gripper logic as Hanoi)
     if cube_size_arg:
         cube_size_for_config = float(cube_size_arg)
-        print(f"[Pick]: cube_size:={cube_size_arg} -> gripper close % from width (same logic as Hanoi).")
+        if _is_2fg7:
+            print(f"[Pick]: cube_size:={cube_size_arg} -> 2FG7 full close (gap=0 mm).")
+        else:
+            print(f"[Pick]: cube_size:={cube_size_arg} -> gripper close % from width (same logic as Hanoi).")
     else:
-        scene_size = pose_getter.get_object_size_from_planning_scene(timeout_sec=2.0)
+        scene_size = pose_getter.get_object_size_from_planning_scene(timeout_sec=2.0) if pose_getter else None
         if scene_size is not None:
             cube_size_for_config = scene_size
             print(f"[Pick]: Object size from MoveIt planning scene: {cube_size_for_config:.3f}m -> gripper close % from width (same logic as Hanoi).")
@@ -303,7 +424,8 @@ def main(args=None):
         print("")
         print("[Pick]: pose_only:=true -> Exiting after pose receipt (no robot/plan/execute).")
         print("  This validates the real-robot pose path: /object_poses/<name> -> pick.")
-        pose_getter.destroy_node()
+        if pose_getter is not None:
+            pose_getter.destroy_node()
         rclpy.shutdown()
         exit(0)
     
@@ -328,7 +450,8 @@ def main(args=None):
         print(f"  Applied grasp_yaw_offset_deg={grasp_yaw_offset_deg:.1f}")
     print("")
     
-    pose_getter.destroy_node()
+    if pose_getter is not None:
+        pose_getter.destroy_node()
     
     # ===== LOAD ROBOT AND GRIPPER CLIENTS ===== #
     print("============================================================")
@@ -360,7 +483,7 @@ def main(args=None):
         from vacuumGripper import vacuumGR  # type: ignore
         EEClient = vacuumGR([object_name], robot, ee_link)
         print("Loaded -> VacuumGripper.")
-    elif ee_type in ("ParallelGripper", "robotiq_2f85", "RobotiqHandE/UR", "onrobot_2fg7"):
+    elif ee_type in ("ParallelGripper", "onrobot_ros2", "onrobot_2fg7"):
         sys.path.append(PATH)
         from endeffector.gripper_factory import create_gripper
         EEClient = create_gripper(ee_type, robot, ee_link, [object_name])
@@ -407,7 +530,7 @@ def main(args=None):
     
     # Brief wait for MoveIt!2 planning scene (reduced from 2.0s for faster startup)
     print("[Pick]: Waiting for MoveIt!2 planning scene to initialize...")
-    time.sleep(0.5)
+    #time.sleep(0.5)
     print("[Pick]: System ready!")
     print("")
     
@@ -417,27 +540,34 @@ def main(args=None):
     # ===== CREATE CONFIG AND EXECUTE PICK ===== #
     print("============================================================")
     print("Executing Automated Pick action...")
+    print(f"[Pick]: Effective config — grasp_z_offset={grasp_z_offset:.3f}m, grasp_extra_descend_m={grasp_extra_descend_m:.3f}m")
     print("")
     
     # Config: always pass cube_size so gripper close % is computed from width (same logic as Hanoi)
     config = {
         "approach_height": approach_height,
         "grasp_z_offset": grasp_z_offset,
+        "grasp_extra_descend_m": grasp_extra_descend_m,
         "fallback_enabled": fallback_enabled,
         "max_attempts": max_attempts,
         "yaw_candidates_deg": [0.0, 30.0, -30.0, 60.0, -60.0, 90.0],
         "approach_height_candidates": [0.22, 0.20, 0.18],
-        "grasp_z_offset_candidates": [0.04, 0.03, 0.02],
+        "grasp_z_offset_candidates": [0.02],
         "prefer_lin_descend": False,
         "min_lift_height": min_lift_height,
         "gripper_open": gripper_open,
         "gripper_closed": gripper_closed,
         "gripper_margin": gripper_margin,
         "cube_size": cube_size_for_config,
+        "gripper_close_full": _is_2fg7,
         "object_name": object_name,
         "support_cube_names": support_cube_names,
         "support_cube_sizes": support_cube_sizes,
     }
+    if min_approach_z is not None:
+        config["min_approach_z"] = min_approach_z
+    if transit_via_center_x is not None:
+        config["transit_via_center_x"] = transit_via_center_x
     
     if min_lift_height is not None:
         print(f"[Pick]: Using minimum lift height: {min_lift_height:.3f}m (to clear obstacles above object)")

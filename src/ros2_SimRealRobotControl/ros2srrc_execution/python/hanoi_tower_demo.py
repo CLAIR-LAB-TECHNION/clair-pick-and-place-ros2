@@ -16,7 +16,7 @@ Usage:
 
 Features:
 - Configurable number of cubes (1-8 recommended)
-- Pegs on robot stand surface, spaced along Y near the bottom (+X) edge
+- Pegs on robot stand surface, spaced along X near the far (+Y) edge
 - Recursive Tower of Hanoi solver
 - Visual progress tracking
 - Move counting and statistics
@@ -34,13 +34,65 @@ sys.path.append(os.path.join(get_package_share_directory("ros2srrc_execution"), 
 
 # Robot stand geometry (matches robot_stand link in ros2srrc_ur5 URDF xacro files).
 # The stand is spawned with the robot at launch; Hanoi cubes are placed on its top surface.
-ROBOT_STAND_LENGTH_X = 1.844
-ROBOT_STAND_WIDTH_Y = 0.84
-ROBOT_STAND_HEIGHT_Z = 0.50
-ROBOT_STAND_CENTER_Z = 0.25
-ROBOT_STAND_SURFACE_Z = ROBOT_STAND_CENTER_Z + ROBOT_STAND_HEIGHT_Z / 2.0
-ROBOT_STAND_BOTTOM_X = ROBOT_STAND_LENGTH_X / 2.0  # +X edge
-DEFAULT_PEG_X_INSET = 0.31  # meters inward from bottom (+X) edge
+# Table box: short X × long Y (robot mounted at y ≈ −0.612 on the −Y edge).
+ROBOT_STAND_LENGTH_X = 0.84
+ROBOT_STAND_WIDTH_Y = 1.844
+ROBOT_STAND_HEIGHT_Z = 0.84
+ROBOT_STAND_CENTER_Z = ROBOT_STAND_HEIGHT_Z / 2.0  # 0.42 m; stand sits on ground (z=0)
+ROBOT_STAND_SURFACE_Z = ROBOT_STAND_CENTER_Z + ROBOT_STAND_HEIGHT_Z / 2.0  # 0.84 m tabletop
+ROBOT_STAND_FAR_Y = ROBOT_STAND_WIDTH_Y / 2.0  # +Y edge (toward gripper at joint1=90°)
+DEFAULT_PEG_Y_INSET = 0.31  # meters inward from +Y edge
+DEFAULT_PEG_X_INSET = DEFAULT_PEG_Y_INSET  # deprecated alias for CLI compat
+
+# Real UR5 + OnRobot 2FG7 (cisrob-09142): validated pick/place XY on robot stand.
+# Physical 4-slot table: outer marks are peg0 (left) and peg3 (right); Hanoi uses peg indices 0 and 2.
+REAL_PEG0_XY = (-0.15, -0.12)
+REAL_PEG3_XY = (0.15, -0.12)   # Hanoi peg index 2 (rightmost)
+REAL_PEG_CENTER_X = 0.0
+REAL_PEG_SPACING = 0.15        # peg0/peg2 X spacing; 30 cm between outer pegs
+REAL_PEG_Y = -0.12
+REAL_PEG_Z = ROBOT_STAND_SURFACE_Z  # 0.84 m — modeled stand / table top (world Z)
+REAL_BOARD_HEIGHT_M = 0.02  # physical board on stand (2 cm); cubes sit on stand + board
+
+# Real UR5+2FG7 pick calibration (ur5_pick_and_place_onrobot.yaml):
+# pick object_pose.z = stand top (0.84) + stacked cube heights below target (not board, not center).
+# Fingertips ≈ EE_robotiq_2f85 + offset along world +Z (top-down grasp).
+REAL_GRASP_Z_OFFSET_LOW = 0.01   # clearance above EE target before physical MoveL descend
+REAL_EE_TO_FINGER_Z = 0.055
+REAL_MIN_MOVEIT_GRASP_Z = 0.87   # RobMove descend fails below this (cisrob-09142 peg0)
+REAL_STACKED_PLACE_Z_LIFT = 0.02   # raise MoveIt place Z when stacking (less physical descend)
+REAL_STACKED_PICK_Z_LIFT = 0.02    # raise MoveIt grasp Z when picking from a stack (solo picks unchanged)
+REAL_POSE_PUBLISH_DURATION_S = 0.5  # hanoi_publish_pose keepalive (was 3s; pick.py also gets explicit x/y/z)
+
+
+def _stand_edge_insets(x, y):
+    """Meters from robot_stand box edges (matches URDF 0.84 × 1.844 m stand, centered at origin)."""
+    half_x = ROBOT_STAND_LENGTH_X / 2.0
+    half_y = ROBOT_STAND_WIDTH_Y / 2.0
+    return {
+        "from_minus_x_edge_m": x - (-half_x),
+        "from_plus_x_edge_m": half_x - x,
+        "from_minus_y_edge_m": y - (-half_y),  # robot mounts near this edge
+        "from_plus_y_edge_m": half_y - y,
+    }
+
+
+def _format_peg_marking_guide(peg_positions):
+    """Print peg XY and inset from stand edges for marking a physical table."""
+    half_x = ROBOT_STAND_LENGTH_X / 2.0
+    half_y = ROBOT_STAND_WIDTH_Y / 2.0
+    print("  Table model: {:.0f} cm (X) × {:.0f} cm (Y), origin at stand center, robot near −Y edge".format(
+        ROBOT_STAND_LENGTH_X * 100, ROBOT_STAND_WIDTH_Y * 100))
+    labels = ["peg0 (left)", "peg1 (center)", "peg2 / physical peg3 (right)"]
+    for i, (x, y) in enumerate(peg_positions):
+        ins = _stand_edge_insets(x, y)
+        label = labels[i] if i < len(labels) else f"peg{i}"
+        print(f"    {label}: X={x:+.3f}, Y={y:+.3f} m")
+        print(f"      {ins['from_minus_x_edge_m']*100:.1f} cm from −X edge, "
+              f"{ins['from_plus_x_edge_m']*100:.1f} cm from +X edge")
+        print(f"      {ins['from_minus_y_edge_m']*100:.1f} cm from −Y edge (robot side), "
+              f"{ins['from_plus_y_edge_m']*100:.1f} cm from +Y edge")
+    print(f"    Outer peg spacing (peg0 ↔ peg3): {abs(peg_positions[2][0] - peg_positions[0][0])*100:.0f} cm")
 
 
 def _publish_cube_pose(name, x, y, z):
@@ -48,9 +100,17 @@ def _publish_cube_pose(name, x, y, z):
     from ament_index_python.packages import get_package_prefix
     pkg_prefix = get_package_prefix("ros2srrc_execution")
     script = os.path.join(pkg_prefix, "lib", "ros2srrc_execution", "hanoi_publish_pose.py")
-    cmd = ["python3", script, f"name:={name}", f"x:={x}", f"y:={y}", f"z:={z}"]
+    cmd = [
+        "python3", script,
+        f"name:={name}", f"x:={x}", f"y:={y}", f"z:={z}",
+        f"duration:={REAL_POSE_PUBLISH_DURATION_S}",
+    ]
     try:
-        subprocess.run(cmd, check=True, timeout=3, capture_output=True, env=os.environ.copy())
+        subprocess.run(
+            cmd, check=True,
+            timeout=max(3.0, REAL_POSE_PUBLISH_DURATION_S + 2.0),
+            capture_output=True, env=os.environ.copy(),
+        )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         print(f"[Hanoi]: WARNING - Failed to publish pose for {name}: {e}")
 
@@ -58,8 +118,9 @@ def _publish_cube_pose(name, x, y, z):
 class TowerOfHanoi:
     """Tower of Hanoi puzzle solver with robot manipulation"""
     
-    def __init__(self, num_cubes, peg_positions, cube_size_base=0.04, cube_height_base=0.04, 
-                 table_z=0.25, table_height=0.50, robot=None, ee_link=None, ee_type=None):
+    def __init__(self, num_cubes, peg_positions, cube_size_base=0.05, cube_height_base=0.05, 
+                 table_z=ROBOT_STAND_CENTER_Z, table_height=ROBOT_STAND_HEIGHT_Z, robot=None, ee_link=None, ee_type=None,
+                 moveit_only=False, virtual_moveit_z=False, board_height=0.0):
         """
         Initialize Tower of Hanoi puzzle
         
@@ -73,6 +134,7 @@ class TowerOfHanoi:
             robot: Optional robot name for pick/place (e.g. ur5)
             ee_link: Optional EE link name for ATTACHLINK (e.g. EE_robotiq_2f85 or EE_robotiq_hande)
             ee_type: Optional end-effector type (e.g. ParallelGripper for sim, RobotiqHandE/UR for real)
+            board_height: Board thickness on stand for real robot (meters); added to REAL_PEG_Z for cube Z
         """
         self.num_cubes = num_cubes
         self.peg_positions = peg_positions  # [(x1, y1), (x2, y2), (x3, y3)]
@@ -82,6 +144,9 @@ class TowerOfHanoi:
         self.robot = robot
         self.ee_link = ee_link
         self.ee_type = ee_type
+        self.moveit_only = moveit_only
+        self.virtual_moveit_z = virtual_moveit_z
+        self.board_height = board_height
         
         # Track state: each peg is a list of cube indices (0 = smallest, num_cubes-1 = largest)
         self.pegs = [[], [], []]  # [peg0, peg1, peg2]
@@ -92,6 +157,9 @@ class TowerOfHanoi:
         # Statistics
         self.move_count = 0
         self.total_moves = 0  # Expected: 2^num_cubes - 1
+        self._pp_robot = None  # in-process pick/place (real robot)
+        self._pp_ee = None
+        self._gripper_is_open = False
         self.move_sequence = []  # Pre-computed sequence of moves: [(cube_index, from_peg, to_peg), ...]
         self.successful_moves = 0
         self.failed_moves = 0
@@ -114,9 +182,15 @@ class TowerOfHanoi:
             self.cube_sizes.append(size)
             self.cube_colors.append(color)
     
+    def _support_surface_z(self):
+        """World Z of the surface cubes rest on (bottom face of bottom cube)."""
+        if self.virtual_moveit_z:
+            return REAL_PEG_Z + self.board_height
+        return self.table_surface_z
+
     def get_cube_z(self, peg_index, stack_position, cube_index=None):
         """
-        Calculate Z position for a cube on a peg
+        Calculate Z position for a cube on a peg (geometric center).
         
         Args:
             peg_index: Which peg (0, 1, or 2)
@@ -126,29 +200,54 @@ class TowerOfHanoi:
         Returns:
             Z coordinate for cube center
         """
-        # Start from robot stand top surface
-        z = self.table_surface_z
-        
-        # Add heights of all cubes below this position
+        z = self._support_surface_z()
+
         if stack_position > 0:
             for pos in range(stack_position):
                 if pos < len(self.pegs[peg_index]):
                     cube_idx = self.pegs[peg_index][pos]
-                    # Use actual cube size (which equals height for cubes)
-                    cube_height = self.cube_sizes[cube_idx]
-                    z += cube_height
+                    z += self.cube_sizes[cube_idx]
                 else:
-                    # Fallback if cube not in state yet (during initial spawn)
                     z += self.cube_height_base
-        
-        # Add half the height of the current cube (to get center)
+
         if cube_index is not None:
             cube_height = self.cube_sizes[cube_index]
         else:
             cube_height = self.cube_height_base
         z += cube_height / 2.0
-        
+
         return z
+
+    def get_pick_reference_z(self, peg_index, stack_position):
+        """
+        pick.py object_pose.z for real UR5+2FG7.
+
+        Stand collision model top (REAL_PEG_Z) plus full heights of cubes below the target —
+        same convention as ur5_pick_and_place_onrobot.yaml (z=0.84 for bottom cube on stand).
+        Board height is NOT added here; it is included in get_cube_z() for spawn/place.
+        """
+        z = REAL_PEG_Z
+        for pos in range(stack_position):
+            if pos < len(self.pegs[peg_index]):
+                cube_idx = self.pegs[peg_index][pos]
+                z += self.cube_sizes[cube_idx]
+            else:
+                z += self.cube_height_base
+        return z
+
+    def compute_real_ee_motion_params(self, z_pick_ref, z_center):
+        """
+        Return (moveit_z_offset, extra_descend_m, z_ee_target) for pick.py / place.py.
+
+        object_pose.z = stand-top pick reference (0.84 + cubes below).
+        MoveIt grasp is anchored just above the required EE height (not pick_ref + fixed
+        offset), so stacked cubes need only ~10 mm extra descend instead of 40 mm.
+        """
+        z_ee_target = z_center - REAL_EE_TO_FINGER_Z
+        z_moveit_z = max(z_ee_target + REAL_GRASP_Z_OFFSET_LOW, REAL_MIN_MOVEIT_GRASP_Z)
+        moveit_z_offset = round(z_moveit_z - z_pick_ref, 4)
+        extra_descend = round(max(0.0, z_moveit_z - z_ee_target), 4)
+        return moveit_z_offset, extra_descend, z_ee_target
     
     def spawn_initial_state(self):
         """Spawn all cubes on the first peg (peg 0)"""
@@ -174,7 +273,7 @@ class TowerOfHanoi:
             
             # Add to peg state
             self.pegs[0].append(i)
-            time.sleep(0.3)  # Brief settle after spawn
+            #time.sleep(0.3)  # Brief settle after spawn
         
         print(f"\n✓ Initial state: {self.num_cubes} cubes on Peg 0")
         self._print_state()
@@ -195,17 +294,41 @@ class TowerOfHanoi:
             "--size", str(size),
             "--color", color
         ]
+        if self.moveit_only:
+            cmd.append("--moveit-only")
         return self._run_command(cmd, f"Spawning {name}", timeout=15)
     
+    def _sync_moveit_scene(self):
+        """Re-add all cubes to MoveIt at current peg/stack positions (after homing clears scene)."""
+        print("\nSyncing MoveIt scene with current cube positions...")
+        for peg_idx in range(3):
+            for stack_pos, cube_index in enumerate(self.pegs[peg_idx]):
+                cube_name = self.cube_names[cube_index]
+                cube_size = self.cube_sizes[cube_index]
+                cube_color = self.cube_colors[cube_index]
+                x, y = self.peg_positions[peg_idx]
+                z = self.get_cube_z(peg_idx, stack_pos, cube_index=cube_index)
+                if not self._spawn_cube(cube_name, x, y, z, cube_size, cube_color):
+                    print(f"WARNING: Could not re-add {cube_name} to MoveIt scene")
+                    return False
+                #time.sleep(0.15)
+        print("MoveIt scene synced.")
+        return True
+
     def _move_to_home(self):
-        """Move robot to home position"""
+        """Move robot to home position (temporarily clears virtual cubes so EE can plan home)."""
         print("\n" + "="*60)
         print("MOVING TO HOME POSITION")
         print("="*60)
+        clear_objects = ",".join(self.cube_names)
         cmd = [
-            "ros2", "run", "ros2srrc_execution", "move_to_home.py"
+            "ros2", "run", "ros2srrc_execution", "move_to_home.py",
+            f"clear_objects:={clear_objects}",
         ]
-        return self._run_command(cmd, "Moving to home position", timeout=30)
+        result = self._run_command(cmd, "Moving to home position", timeout=30)
+        if not self._sync_moveit_scene():
+            print("WARNING: MoveIt cube sync failed after homing.")
+        return result
     
     def _pick_cube(self, cube_index, from_peg=None, from_stack_pos=None):
         """
@@ -306,15 +429,74 @@ class TowerOfHanoi:
                 if absolute_lift_z > MAX_LIFT_ABSOLUTE_Z:
                     min_lift_height = MAX_LIFT_ABSOLUTE_Z - picked_cube_z_center
         
-        time.sleep(0.05)  # Brief physics settle
-        
-        # Real robot with known poses: publish cube pose so pick can get it
-        if self.ee_type is not None and from_peg is not None and from_stack_pos is not None:
-            x, y = self.peg_positions[from_peg]
-            z = self.get_cube_z(from_peg, from_stack_pos, cube_index=cube_index)
-            _publish_cube_pose(cube_name, x, y, z)
-            time.sleep(0.2)  # Pose propagate to pick (transient_local)
-        
+        #time.sleep(0.02)  # Brief physics settle
+
+        x, y = self.peg_positions[from_peg]
+        z_center = self.get_cube_z(from_peg, from_stack_pos, cube_index=cube_index)
+        z_pick = self.get_pick_reference_z(from_peg, from_stack_pos)
+        grasp_z_offset, extra_descend, z_ee_target = self.compute_real_ee_motion_params(z_pick, z_center)
+
+        # Stacked pick only: raise MoveIt grasp Z (grasp_z_offset). Bottom/solo picks
+        # (from_stack_pos == 0) keep compute_real_ee_motion_params unchanged.
+        if (
+            from_stack_pos is not None
+            and from_stack_pos > 0
+            and from_peg is not None
+            and len(self.pegs[from_peg]) > from_stack_pos
+        ):
+            grasp_z_offset = round(grasp_z_offset + REAL_STACKED_PICK_Z_LIFT, 4)
+            print(
+                f"[Hanoi]: Stacked pick on Peg {from_peg} "
+                f"({from_stack_pos} cube(s) below target) "
+                f"— MoveIt grasp Z +{REAL_STACKED_PICK_Z_LIFT * 1000:.0f} mm "
+                f"(solo picks at stack pos 0 unchanged)"
+            )
+
+        # Cubes below the target on the same peg block MoveIt descend — clear them in pick.py
+        support_names = []
+        support_size_dict = {}
+        support_cube_args = []
+        if from_peg is not None and from_stack_pos is not None and from_stack_pos > 0:
+            support_size_pairs = []
+            for pos in range(from_stack_pos):
+                below_idx = self.pegs[from_peg][pos]
+                below_name = self.cube_names[below_idx]
+                support_names.append(below_name)
+                support_size_dict[below_name] = self.cube_sizes[below_idx]
+                support_size_pairs.append(f"{below_name}:{self.cube_sizes[below_idx]}")
+            support_cube_args = [
+                f"support_cubes:={','.join(support_names)}",
+                f"support_cube_sizes:={','.join(support_size_pairs)}",
+            ]
+
+        uses_explicit_pose = self.virtual_moveit_z or self.ee_type == "onrobot_2fg7"
+        # Topic publisher only needed when pick.py must subscribe (not 2FG7 / explicit x,y,z)
+        if (
+            self.ee_type is not None
+            and from_peg is not None
+            and from_stack_pos is not None
+            and not uses_explicit_pose
+        ):
+            _publish_cube_pose(cube_name, x, y, z_pick)
+
+        if uses_explicit_pose:
+            z_moveit = z_pick + grasp_z_offset
+            pick_desc = (
+                f"Picking {cube_name} (pick ref Z={z_pick:.3f}m, center Z={z_center:.3f}m, "
+                f"MoveIt grasp Z={z_moveit:.3f}m, EE target Z={z_ee_target:.3f}m, "
+                f"extra descend={extra_descend * 1000:.0f}mm)"
+            )
+            if self._uses_inprocess_pick_place():
+                if min_lift_height is not None:
+                    pick_desc = f"{pick_desc}, min_lift: {min_lift_height:.3f}m"
+                return self._execute_pick_inprocess(
+                    cube_name, cube_size, x, y, z_pick, grasp_z_offset, extra_descend,
+                    support_names, support_size_dict, min_lift_height, pick_desc,
+                    from_peg=from_peg,
+                )
+        else:
+            pick_desc = f"Picking {cube_name} (size: {cube_size:.3f}m)"
+
         cmd = [
             "ros2", "run", "ros2srrc_execution", "pick.py",
             f"object:={cube_name}",
@@ -326,13 +508,21 @@ class TowerOfHanoi:
             cmd.append(f"ee_link:={self.ee_link}")
         if self.ee_type is not None:
             cmd.append(f"ee_type:={self.ee_type}")
+        if uses_explicit_pose:
+            cmd.append(f"x:={x}")
+            cmd.append(f"y:={y}")
+            cmd.append(f"z:={z_pick}")
+            cmd.append(f"grasp_z_offset:={grasp_z_offset}")
+            cmd.append(f"grasp_extra_descend_m:={extra_descend}")
+            cmd.extend(support_cube_args)
         
         # Add min_lift_height if calculated
         if min_lift_height is not None:
             cmd.append(f"min_lift_height:={min_lift_height}")
-            result = self._run_command(cmd, f"Picking {cube_name} (size: {cube_size:.3f}m, min_lift: {min_lift_height:.3f}m)", timeout=60)
+            result = self._run_command(
+                cmd, f"{pick_desc}, min_lift: {min_lift_height:.3f}m", timeout=60)
         else:
-            result = self._run_command(cmd, f"Picking {cube_name} (size: {cube_size:.3f}m)", timeout=60)
+            result = self._run_command(cmd, pick_desc, timeout=60)
         
         return result
     
@@ -344,54 +534,206 @@ class TowerOfHanoi:
         - Approach: PTP (fixed position/joint space) first
         - Descend: PTP first, with LIN fallback if PTP fails
         - Retract: LIN first, with PTP fallback if LIN fails
-        - Calculates place_z_offset dynamically based on cube size
         """
         cube_name = self.cube_names[cube_index]
-        cube_size = self.cube_sizes[cube_index]  # Get cube size (which equals height for cubes)
+        cube_size = self.cube_sizes[cube_index]
         x, y = self.peg_positions[peg_index]
-        
-        # Calculate target surface Z: if stacking on another cube, use top surface of bottom cube
-        # Otherwise use table surface
-        # Note: place.py expects z to be the target surface, and will add place_z_offset
-        if stack_position == 0:
-            # Placing on robot stand surface
-            target_surface_z = self.table_surface_z
+        z_center = self.get_cube_z(peg_index, stack_position, cube_index=cube_index)
+
+        if self.virtual_moveit_z or self.ee_type == "onrobot_2fg7":
+            z_ref = self.get_pick_reference_z(peg_index, stack_position)
+            moveit_z_offset, extra_descend, z_ee_target = self.compute_real_ee_motion_params(
+                z_ref, z_center)
+            # Stacked place: raise MoveIt stop height (place_z_offset). Trimming only
+            # place_extra_descend_m had no effect when extra was already ~10 mm (clamps to 0).
+            cubes_on_peg = len(self.pegs[peg_index])
+            if stack_position > 0 and cubes_on_peg > 0:
+                moveit_z_offset = round(moveit_z_offset + REAL_STACKED_PLACE_Z_LIFT, 4)
+                print(
+                    f"[Hanoi]: Stacked place on Peg {peg_index} "
+                    f"({cubes_on_peg} cube(s) already on peg, stack pos {stack_position}) "
+                    f"— MoveIt place Z +{REAL_STACKED_PLACE_Z_LIFT * 1000:.0f} mm "
+                    f"(less descend vs empty peg)"
+                )
+            z_moveit = z_ref + moveit_z_offset
+            support_names = []
+            support_size_dict = {}
+            support_cube_args = []
+            if stack_position > 0:
+                support_size_pairs = []
+                for pos in range(stack_position):
+                    below_idx = self.pegs[peg_index][pos]
+                    below_name = self.cube_names[below_idx]
+                    support_names.append(below_name)
+                    support_size_dict[below_name] = self.cube_sizes[below_idx]
+                    support_size_pairs.append(f"{below_name}:{self.cube_sizes[below_idx]}")
+                support_cube_args = [
+                    f"support_cubes:={','.join(support_names)}",
+                    f"support_cube_sizes:={','.join(support_size_pairs)}",
+                ]
+            place_desc = (
+                f"Placing {cube_name} on Peg {peg_index} (center Z={z_center:.3f}m, "
+                f"place ref Z={z_ref:.3f}m, MoveIt Z={z_moveit:.3f}m, "
+                f"EE target Z={z_ee_target:.3f}m, extra descend={extra_descend * 1000:.0f}mm)"
+            )
+            if self._uses_inprocess_pick_place():
+                return self._execute_place_inprocess(
+                    cube_name, cube_size, x, y, z_ref, z_center,
+                    moveit_z_offset, extra_descend, support_names, support_size_dict, place_desc,
+                )
+            cmd = [
+                "ros2", "run", "ros2srrc_execution", "place.py",
+                f"x:={x}",
+                f"y:={y}",
+                f"z:={z_ref}",
+                f"object:={cube_name}",
+                f"cube_size:={cube_size}",
+                f"place_z_offset:={moveit_z_offset}",
+                f"place_extra_descend_m:={extra_descend}",
+                f"place_center_z:={z_center}",
+            ]
+            cmd.extend(support_cube_args)
         else:
-            # Placing on top of another cube - get the top surface of the cube below
-            cube_below_index = self.pegs[peg_index][stack_position - 1]
-            cube_below_height = self.cube_sizes[cube_below_index]
-            # Get Z position of cube below (its center)
-            z_below_center = self.get_cube_z(peg_index, stack_position - 1, cube_index=cube_below_index)
-            # Top surface = center + half height
-            target_surface_z = z_below_center + (cube_below_height / 2.0)
-        
-        # Pass target surface Z to place.py - it will add place_z_offset (cube_size/2 + 0.001)
-        # to get the final cube center position
-        z = target_surface_z
-        
-        # Calculate expected place_z_offset for logging (place.py: cube_height/2 + 0.07m; post_open_push_down 0.02m)
-        gripper_clearance = 0.02  # used only for expected_cube_center_z log; place.py uses 0.07 for offset
-        expected_offset = (cube_size / 2.0) + gripper_clearance
-        expected_cube_center_z = z + expected_offset
-        # After opening, cube will be pushed down by gripper_clearance to settle on surface
-        final_cube_center_z = z + (cube_size / 2.0)
-        
-        cmd = [
-            "ros2", "run", "ros2srrc_execution", "place.py",
-            f"x:={x}",
-            f"y:={y}",
-            f"z:={z}",
-            f"object:={cube_name}",
-            f"cube_size:={cube_size}"  # Pass cube size for dynamic offset calculation
-        ]
+            if stack_position == 0:
+                z = self.table_surface_z
+            else:
+                cube_below_index = self.pegs[peg_index][stack_position - 1]
+                cube_below_height = self.cube_sizes[cube_below_index]
+                z_below_center = self.get_cube_z(
+                    peg_index, stack_position - 1, cube_index=cube_below_index)
+                z = z_below_center + (cube_below_height / 2.0)
+            place_desc = (
+                f"Placing {cube_name} on Peg {peg_index} (target surface: {z:.3f}m, "
+                f"size: {cube_size:.3f}m)"
+            )
+            cmd = [
+                "ros2", "run", "ros2srrc_execution", "place.py",
+                f"x:={x}",
+                f"y:={y}",
+                f"z:={z}",
+                f"object:={cube_name}",
+                f"cube_size:={cube_size}",
+            ]
+
         if self.robot is not None:
             cmd.append(f"robot:={self.robot}")
         if self.ee_link is not None:
             cmd.append(f"ee_link:={self.ee_link}")
         if self.ee_type is not None:
             cmd.append(f"ee_type:={self.ee_type}")
-        return self._run_command(cmd, f"Placing {cube_name} on Peg {peg_index} (target surface: {target_surface_z:.3f}m, initial cube center: {expected_cube_center_z:.3f}m, final cube center: {final_cube_center_z:.3f}m, size: {cube_size:.3f}m)", timeout=60)
+        return self._run_command(cmd, place_desc, timeout=60)
     
+    def _obstacle_cubes_for_pick(self, from_peg):
+        """Cubes on other pegs — removed from MoveIt during approach so arm can cross the table."""
+        names = []
+        sizes = {}
+        for peg_idx in range(3):
+            if peg_idx == from_peg:
+                continue
+            for cube_idx in self.pegs[peg_idx]:
+                name = self.cube_names[cube_idx]
+                names.append(name)
+                sizes[name] = self.cube_sizes[cube_idx]
+        return names, sizes
+
+    def _uses_inprocess_pick_place(self):
+        """Real UR5+2FG7: reuse robot/gripper clients instead of ros2 run per move."""
+        return self.ee_type == "onrobot_2fg7"
+
+    def _ensure_pick_place_clients(self):
+        if self._pp_robot is not None:
+            return
+        import rclpy
+        from robot import RBT
+        from endeffector.gripper_factory import create_gripper
+
+        if not rclpy.ok():
+            rclpy.init()
+        print("[Hanoi]: Starting in-process pick/place (reuses robot+gripper clients between moves).")
+        self._pp_robot = RBT()
+        self._pp_ee = create_gripper(self.ee_type, self.robot, self.ee_link, [])
+        self._gripper_is_open = False
+
+    def _execute_pick_inprocess(
+        self, cube_name, cube_size, x, y, z_pick, grasp_z_offset, extra_descend,
+        support_names, support_size_dict, min_lift_height, pick_desc, from_peg=None,
+    ):
+        from ros2srrc_data.msg import Robpose
+        from pick_manual import Pick
+
+        self._ensure_pick_place_clients()
+        object_pose = Robpose()
+        object_pose.x, object_pose.y, object_pose.z = x, y, z_pick
+        object_pose.qx, object_pose.qy, object_pose.qz, object_pose.qw = -0.5, 0.5, 0.5, 0.5
+
+        obstacle_names, obstacle_sizes = (
+            self._obstacle_cubes_for_pick(from_peg) if from_peg is not None else ([], {})
+        )
+
+        config = {
+            "approach_height": 0.22,
+            "grasp_z_offset": grasp_z_offset,
+            "grasp_extra_descend_m": extra_descend,
+            "fallback_enabled": True,
+            "max_attempts": 12,
+            "yaw_candidates_deg": [0.0, 30.0, -30.0, 60.0, -60.0, 90.0],
+            "approach_height_candidates": [0.22, 0.20, 0.18],
+            "grasp_z_offset_candidates": [0.02],
+            "prefer_lin_descend": False,
+            "gripper_open": 0.110,
+            "gripper_closed": 0.0,
+            "gripper_margin": 0.002,
+            "cube_size": cube_size,
+            "gripper_close_full": True,
+            "object_name": cube_name,
+            "support_cube_names": support_names,
+            "support_cube_sizes": support_size_dict,
+            "skip_gripper_open_before_pick": self._gripper_is_open,
+            "obstacle_cube_names": obstacle_names,
+            "obstacle_cube_sizes": obstacle_sizes,
+        }
+        if min_lift_height is not None:
+            config["min_lift_height"] = min_lift_height
+
+        print(f"\n→ {pick_desc}")
+        result = Pick(self._pp_robot, self._pp_ee, config).execute(object_pose)
+        if result["Success"]:
+            self._gripper_is_open = False
+        else:
+            print(f"\n✗ {pick_desc} failed: {result.get('Message', 'unknown')}")
+        return result["Success"]
+
+    def _execute_place_inprocess(
+        self, cube_name, cube_size, x, y, z_ref, z_center,
+        moveit_z_offset, extra_descend, support_names, support_size_dict, place_desc,
+    ):
+        from ros2srrc_data.msg import Robpose
+        from place_manual import Place
+
+        self._ensure_pick_place_clients()
+        place_pose = Robpose()
+        place_pose.x, place_pose.y, place_pose.z = x, y, z_ref
+        place_pose.qx, place_pose.qy, place_pose.qz, place_pose.qw = -0.5, 0.5, 0.5, 0.5
+
+        config = {
+            "approach_height": 0.15,
+            "place_z_offset": moveit_z_offset,
+            "place_extra_descend_m": extra_descend,
+            "object_name": cube_name,
+            "cube_size_for_scene": cube_size,
+            "place_center_z": z_center,
+            "support_cube_names": support_names,
+            "support_cube_sizes": support_size_dict,
+        }
+
+        print(f"\n→ {place_desc}")
+        result = Place(self._pp_robot, self._pp_ee, config).execute(place_pose)
+        if result["Success"]:
+            self._gripper_is_open = True
+        else:
+            print(f"\n✗ {place_desc} failed: {result.get('Message', 'unknown')}")
+        return result["Success"]
+
     def _run_command(self, cmd, description, timeout=30):
         """Run a shell command and wait for completion"""
         try:
@@ -478,7 +820,7 @@ class TowerOfHanoi:
         
         # Update state (add to destination peg)
         self.pegs[to_peg].append(cube_index)
-        time.sleep(0.15)  # Brief settle before next move
+        #time.sleep(0.15)  # Brief settle before next move
         
         self._print_state()
         return True
@@ -574,7 +916,7 @@ class TowerOfHanoi:
         print("="*60)
         if not self._move_to_home():
             print("WARNING: Could not move to home position, continuing anyway...")
-        time.sleep(0.15)  # Brief settle before moves
+        #time.sleep(0.15)  # Brief settle before moves
         
         # Now execute the moves
         all_successful = True
@@ -605,7 +947,7 @@ class TowerOfHanoi:
         print("="*60)
         if not self._move_to_home():
             print("WARNING: Could not return to home position.")
-        time.sleep(0.15)
+        #time.sleep(0.15)
         
         return all_successful
 
@@ -630,11 +972,23 @@ Examples:
   
   # Real robot: skip cube spawn, physical setup, known poses (no perception needed)
   python3 hanoi_tower_demo.py --ee_type RobotiqHandE/UR --ee_link EE_robotiq_hande --skip_spawn \\
-    --stand_z 0.25 --peg_spacing 0.20 --cube_size_base 0.05 --initial_state "0:0,1,2;1:;2:"
+    --stand_z 0.42 --peg_spacing 0.20 --cube_size_base 0.05 --initial_state "0:0,1,2;1:;2:"
   # Poses are computed from peg positions + stack state and published to /object_poses/<name>
   
-  # Custom peg positions (pegs run along Y near the stand bottom/+X edge)
+  # Custom peg positions (pegs run along X near the stand +Y edge)
+  python3 hanoi_tower_demo.py --num_cubes 4 --peg_spacing 0.25 --peg_y 0.612 --peg_center_x 0.0
+  
+  # Deprecated CLI (still accepted): --peg_x maps to --peg_y, --peg_center_y to --peg_center_x
   python3 hanoi_tower_demo.py --num_cubes 4 --peg_spacing 0.25 --peg_x 0.612 --peg_center_y 0.0
+  
+  # Two 5cm cubes on peg0, real UR5 + 2FG7
+  python3 hanoi_tower_demo.py --num_cubes 2 --peg_layout real_2fg7 \\
+    --cube_sizes 0.05,0.05 --ee_type onrobot_2fg7 --ee_link EE_robotiq_2f85 --robot ur5
+
+  # Physical cubes already on peg0 (skip MoveIt spawn; poses published before each pick)
+  python3 hanoi_tower_demo.py --num_cubes 2 --peg_layout real_2fg7 \\
+    --cube_sizes 0.05,0.05 --skip_spawn --initial_state "0:0,1;1:;2:" \\
+    --ee_type onrobot_2fg7 --ee_link EE_robotiq_2f85 --robot ur5
   
   # Skip spawning cubes (robot stand is already present from MoveIt/Gazebo launch)
   python3 hanoi_tower_demo.py --num_cubes 3 --skip_spawn
@@ -646,31 +1000,50 @@ Examples:
     parser.add_argument('--num_disks', type=int, default=None,
                         help='DEPRECATED: Use --num_cubes instead. Number of cubes (1-8 recommended)')
     parser.add_argument('--stand_z', type=float, default=ROBOT_STAND_CENTER_Z,
-                        help='Robot stand center Z in meters (default: 0.25)')
+                        help='Robot stand center Z in meters (default: 0.42)')
     parser.add_argument('--table_z', type=float, default=None,
                         help='DEPRECATED: use --stand_z instead')
+    parser.add_argument('--peg_layout', type=str, default=None,
+                        choices=['real_2fg7'],
+                        help='Preset peg positions: real_2fg7 = peg0 (-0.15,-0.12) and peg3/peg2 (+0.15,-0.12) validated on UR5+2FG7')
     parser.add_argument('--peg_spacing', type=float, default=0.20,
-                        help='Spacing between pegs along Y in meters (default: 0.20)')
+                        help='Spacing between pegs along X in meters (default: 0.20)')
+    parser.add_argument('--peg_y', type=float, default=None,
+                        help='Y position for all pegs near +Y edge (default: +Y edge minus --peg_y_inset)')
+    parser.add_argument('--peg_center_x', type=float, default=0.0,
+                        help='Center X position for the three pegs (default: 0.0)')
+    parser.add_argument('--peg_y_inset', type=float, default=DEFAULT_PEG_Y_INSET,
+                        help=f'Distance from +Y edge when --peg_y is not set (default: {DEFAULT_PEG_Y_INSET})')
     parser.add_argument('--peg_x', type=float, default=None,
-                        help='X position for all pegs near bottom (+X) edge (default: bottom edge minus --peg_x_inset)')
-    parser.add_argument('--peg_center_y', type=float, default=0.0,
-                        help='Center Y position for the three pegs (default: 0.0)')
-    parser.add_argument('--peg_x_inset', type=float, default=DEFAULT_PEG_X_INSET,
-                        help=f'Distance from bottom (+X) edge when --peg_x is not set (default: {DEFAULT_PEG_X_INSET})')
+                        help='DEPRECATED: use --peg_y. Former fixed peg coordinate near old +X edge.')
+    parser.add_argument('--peg_center_y', type=float, default=None,
+                        help='DEPRECATED: use --peg_center_x. Former center Y for peg line.')
+    parser.add_argument('--peg_x_inset', type=float, default=None,
+                        help=f'DEPRECATED: use --peg_y_inset (default: {DEFAULT_PEG_Y_INSET})')
+    parser.add_argument('--cube_sizes', type=str, default=None,
+                        help='Exact cube sizes in meters for cube_0, cube_1, ... (bottom=0, top=last). '
+                             'Example for two 5cm cubes: --cube_sizes 0.05,0.05')
     parser.add_argument('--cube_size_base', type=float, default=0.05,
                         help='Base size for smallest cube in meters (default: 0.05)')
     parser.add_argument('--cube_height', type=float, default=0.05,
                         help='Height of each cube in meters (default: 0.05)')
+    parser.add_argument('--board_height', type=float, default=None,
+                        help='Height of physical board on stand in meters (default: 0.02 for real_2fg7 / onrobot_2fg7, else 0)')
     parser.add_argument('--disk_size_base', type=float, default=None,
                         help='DEPRECATED: Use --cube_size_base instead')
     parser.add_argument('--disk_height', type=float, default=None,
                         help='DEPRECATED: Use --cube_height instead')
     parser.add_argument('--skip_spawn', action='store_true',
                         help='Skip spawning cubes (robot stand comes from MoveIt/Gazebo launch)')
+    parser.add_argument('--moveit_only', action='store_true',
+                        help='Add cubes to MoveIt planning scene only (no Gazebo). '
+                             'Auto-enabled when --ee_type onrobot_2fg7.')
+    parser.add_argument('--gazebo_spawn', action='store_true',
+                        help='Also spawn cubes in Gazebo (sim only; ignored if --moveit_only)')
     parser.add_argument('--robot', type=str, default=None,
                         help='Robot name for pick/place (e.g. ur5). If not set, scripts use their default.')
     parser.add_argument('--ee_type', type=str, default=None,
-                        help='End-effector type: ParallelGripper (sim), RobotiqHandE/UR or robotiq_2f85 (real Robotiq), onrobot_2fg7 (real OnRobot). Default: ParallelGripper.')
+                        help='End-effector type: ParallelGripper (sim), onrobot_2fg7 (real 2FG7), onrobot_ros2 (RG2/RG6 serial). Default: ParallelGripper.')
     parser.add_argument('--ee_link', type=str, default=None,
                         help='End-effector link name (e.g. EE_robotiq_2f85 or EE_robotiq_hande). Must match the link in your robot URDF.')
     parser.add_argument('--initial_state', type=str, default=None,
@@ -698,14 +1071,34 @@ Examples:
     if args.table_z is not None:
         print("WARNING: --table_z is deprecated, use --stand_z instead")
 
-    peg_x = args.peg_x if args.peg_x is not None else (ROBOT_STAND_BOTTOM_X - args.peg_x_inset)
-    peg_center_y = args.peg_center_y
+    peg_y_inset = args.peg_y_inset if args.peg_x_inset is None else args.peg_x_inset
+    if args.peg_x_inset is not None:
+        print("WARNING: --peg_x_inset is deprecated, use --peg_y_inset instead")
 
-    # Three pegs in a line along Y, fixed X near the stand bottom (+X) edge
+    if args.peg_layout == 'real_2fg7':
+        peg_center_x = REAL_PEG_CENTER_X
+        args.peg_spacing = REAL_PEG_SPACING
+        peg_y = REAL_PEG_Y
+        print("Using real_2fg7 peg layout (peg0 left, peg3/peg2 right)")
+    else:
+        if args.peg_y is not None:
+            peg_y = args.peg_y
+        elif args.peg_x is not None:
+            print("WARNING: --peg_x is deprecated, use --peg_y instead")
+            peg_y = args.peg_x
+        else:
+            peg_y = ROBOT_STAND_FAR_Y - peg_y_inset
+
+        peg_center_x = args.peg_center_x
+        if args.peg_center_y is not None:
+            print("WARNING: --peg_center_y is deprecated, use --peg_center_x instead")
+            peg_center_x = args.peg_center_y
+
+    # Three pegs in a line along X, fixed Y near the stand +Y edge (reachable from base at y ≈ −0.612)
     peg_positions = [
-        (peg_x, peg_center_y - args.peg_spacing),  # Peg 0
-        (peg_x, peg_center_y),                     # Peg 1 (center)
-        (peg_x, peg_center_y + args.peg_spacing),  # Peg 2
+        (peg_center_x - args.peg_spacing, peg_y),  # Peg 0
+        (peg_center_x, peg_y),                     # Peg 1 (center)
+        (peg_center_x + args.peg_spacing, peg_y),  # Peg 2
     ]
     
     # Calculate expected number of moves: 2^n - 1
@@ -722,14 +1115,46 @@ Examples:
     print(f"  Robot: {args.robot or '(default)'}")
     print(f"  Playing surface: robot stand (top Z={ROBOT_STAND_SURFACE_Z:.3f}m)")
     print(f"  Stand center Z: {stand_z:.3f}m")
-    print(f"  Peg line X: {peg_x:.3f}m (near bottom/+X edge), center Y: {peg_center_y:.3f}m")
-    print(f"  Peg spacing (Y): {args.peg_spacing}m, cube size base: {cube_size_base}m")
+    print(f"  Peg line Y: {peg_y:.3f}m (near +Y edge), center X: {peg_center_x:.3f}m")
+    print(f"  Peg spacing (X): {args.peg_spacing}m, cube size base: {cube_size_base}m")
     print(f"  Peg positions:")
     for i, (x, y) in enumerate(peg_positions):
         print(f"    Peg {i}: ({x:.3f}, {y:.3f})")
+    if args.peg_layout == 'real_2fg7':
+        print(f"  Physical table marks (outer slots):")
+        print(f"    peg0 (left):  ({REAL_PEG0_XY[0]:.3f}, {REAL_PEG0_XY[1]:.3f})")
+        print(f"    peg3 (right): ({REAL_PEG3_XY[0]:.3f}, {REAL_PEG3_XY[1]:.3f})  [Hanoi peg index 2]")
+        print(f"  Distances from modeled stand edges (84 cm × 184.4 cm):")
+        _format_peg_marking_guide(peg_positions)
     print("")
     
     # Initialize puzzle
+    moveit_only = args.moveit_only or (
+        args.ee_type == "onrobot_2fg7" and not args.gazebo_spawn
+    )
+    virtual_moveit_z = args.peg_layout == "real_2fg7" or args.ee_type == "onrobot_2fg7"
+    board_height = (
+        REAL_BOARD_HEIGHT_M if args.board_height is None and virtual_moveit_z
+        else (0.0 if args.board_height is None else args.board_height)
+    )
+    if moveit_only:
+        print("Cube spawn: MoveIt only (no Gazebo)")
+    if virtual_moveit_z:
+        support_z = REAL_PEG_Z + board_height
+        example_bottom_center = support_z + cube_size_base / 2.0
+        example_top_center = support_z + cube_size_base + cube_size_base / 2.0
+        example_pick_ref_bottom = REAL_PEG_Z
+        example_pick_ref_top = REAL_PEG_Z + cube_size_base
+        example_ee_bottom = example_bottom_center - REAL_EE_TO_FINGER_Z
+        example_moveit_bottom = max(example_ee_bottom + REAL_GRASP_Z_OFFSET_LOW, REAL_MIN_MOVEIT_GRASP_Z)
+        example_ee_top = example_top_center - REAL_EE_TO_FINGER_Z
+        example_moveit_top = max(example_ee_top + REAL_GRASP_Z_OFFSET_LOW, REAL_MIN_MOVEIT_GRASP_Z)
+        print("Real-robot cube Z: spawn/place at geometric center; pick uses stand-top reference")
+        print(f"  Bottom 5cm cube: center={example_bottom_center:.3f}m, "
+              f"MoveIt Z={example_moveit_bottom:.3f}m, extra={(example_moveit_bottom - example_ee_bottom) * 1000:.0f}mm")
+        print(f"  Top of 2-stack: center={example_top_center:.3f}m, pick ref={example_pick_ref_top:.3f}m, "
+              f"MoveIt Z={example_moveit_top:.3f}m, extra={(example_moveit_top - example_ee_top) * 1000:.0f}mm")
+
     hanoi = TowerOfHanoi(
         num_cubes=num_cubes,
         peg_positions=peg_positions,
@@ -739,16 +1164,28 @@ Examples:
         table_height=ROBOT_STAND_HEIGHT_Z,
         robot=args.robot,
         ee_link=args.ee_link,
-        ee_type=args.ee_type
+        ee_type=args.ee_type,
+        moveit_only=moveit_only,
+        virtual_moveit_z=virtual_moveit_z,
+        board_height=board_height,
     )
     hanoi.total_moves = expected_moves
+
+    if args.cube_sizes:
+        sizes = [float(s.strip()) for s in args.cube_sizes.split(',')]
+        if len(sizes) != num_cubes:
+            print(f"ERROR: --cube_sizes needs {num_cubes} values, got {len(sizes)}")
+            return 1
+        hanoi.cube_sizes = sizes
+        print(f"Using explicit cube sizes (cube_0 bottom → cube_{num_cubes - 1} top): {sizes}")
+        print("")
     
     # Spawn initial state, or set state for resume
     if not args.skip_spawn:
         if not hanoi.spawn_initial_state():
             print("\n✗ FAILED: Could not spawn initial state")
             return 1
-        time.sleep(0.5)  # Brief settle for all spawned objects
+        #time.sleep(0.5)  # Brief settle for all spawned objects
     elif args.initial_state:
         # Resume from current state: parse initial_state and set pegs
         # Format: 0:4;1:;2:0,1,2,3  (peg_index:comma-separated cube indices, semicolon between pegs)

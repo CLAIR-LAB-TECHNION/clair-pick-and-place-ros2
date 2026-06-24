@@ -1,6 +1,6 @@
 # gripper_factory.py
 # Single selection point for gripper backend based on EndEffector config.
-# EndEffector: robotiq_2f85 | onrobot_2fg7 | ParallelGripper (sim)
+# EndEffector: onrobot_2fg7 (real 2FG7) | onrobot_ros2 (RG2/RG6 serial) | ParallelGripper (sim)
 
 import os
 import sys
@@ -14,18 +14,16 @@ def create_gripper(
     ee_link: str = "EE_robotiq_2f85",
     object_list=None,
 ) -> GripperInterface:
-    """Create gripper backend from config.
-    end_effector: 'robotiq_2f85' | 'onrobot_2fg7' | 'ParallelGripper'
-    """
+    """Create gripper backend from config."""
     end_effector = (end_effector or "").strip()
 
-    if end_effector in ("robotiq_2f85", "RobotiqHandE/UR"):
-        from .gripper_robotiq import RobotiqGripperBackend
-        return RobotiqGripperBackend()
-
     if end_effector == "onrobot_2fg7":
-        from .gripper_onrobot_2fg7 import OnRobot2FG7Backend
-        return OnRobot2FG7Backend()
+        from .gripper_onrobot_2fg7_pkg import OnRobot2FG7PkgBackend
+        return OnRobot2FG7PkgBackend()
+
+    if end_effector == "onrobot_ros2":
+        from .gripper_onrobot_ros2 import OnRobotRos2Backend
+        return OnRobotRos2Backend()
 
     if end_effector == "ParallelGripper":
         from ament_index_python.packages import get_package_share_directory
@@ -40,5 +38,5 @@ def create_gripper(
 
     raise ValueError(
         f"Unknown EndEffector '{end_effector}'. "
-        "Use: robotiq_2f85 | onrobot_2fg7 | ParallelGripper"
+        "Use: onrobot_2fg7 | onrobot_ros2 | ParallelGripper"
     )

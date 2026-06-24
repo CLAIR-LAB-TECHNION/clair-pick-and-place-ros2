@@ -180,7 +180,7 @@ def main():
     rclpy.init()
     remover = ObjectRemover()
     
-    time.sleep(0.15)  # Brief connect time
+    #time.sleep(0.15)  # Brief connect time
     
     success = True
     

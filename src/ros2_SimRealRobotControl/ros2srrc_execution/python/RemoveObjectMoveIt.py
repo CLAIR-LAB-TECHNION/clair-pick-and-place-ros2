@@ -62,11 +62,11 @@ def main():
     remover = ObjectRemover()
     
     import time
-    time.sleep(0.2)
+    #time.sleep(0.2)
     
     # Remove from MoveIt
     remover.remove_from_moveit(args.name)
-    time.sleep(0.2)
+    #time.sleep(0.2)
     
     remover.get_logger().info('Done!')
     remover.destroy_node()

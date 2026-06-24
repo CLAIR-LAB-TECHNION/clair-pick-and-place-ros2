@@ -1,6 +1,6 @@
 # clair-pick-and-place-ros2
 
-A ROS 2 workspace for **sim-to-real** pick-and-place with a UR5 arm. This project provides a **high-level execution layer**: **Pick** and **Place** primitives, a **program runner** (ExecuteProgram) for task sequences, and the **Tower of Hanoi** demo—in simulation (Gazebo) or on a real UR5 with OnRobot 2FG7.
+A ROS 2 workspace for **sim-to-real** pick-and-place with a UR5 arm. This project provides a **high-level execution layer**: **Pick** and **Place** primitives, a **program runner** (ExecuteProgram) for task sequences, and the **Tower of Hanoi** demo—in simulation (Gazebo) or on a real UR5 with an OnRobot RG2/RG6 gripper via [UR_OnRobot_ROS2](https://github.com/tonydle/UR_OnRobot_ROS2).
 
 ---
 
@@ -10,18 +10,17 @@ This project is intended for two main workflows:
 
 | Use case | Hardware | Config | Launch | Programs / demos |
 |----------|----------|--------|--------|-------------------|
-| **1. Real robot** | UR5 arm + **OnRobot 2FG7** gripper | **ur5_4** | `bringup/bringup_ur.launch.py` with `config:=ur5_4` and `robot_ip:=<IP>` | Pick-place, Hanoi demo, etc. Use programs with `EndEffector: "onrobot_2fg7"` (e.g. `ur5_pick_and_place_2fg7`). |
-| **2. Simulation** | UR5 + **Robotiq 2F-85** gripper in Gazebo | **ur5_2** | `moveit2.launch.py` with `config:=ur5_2` | Pick-place, Hanoi demo with `EndEffector: "ParallelGripper"` or `"robotiq_2f85"` (e.g. `ur5_pick_and_place`). |
+| **1. Real robot** | UR5 arm + **OnRobot 2FG7** gripper | **ur5_4** | `bringup_ur.launch.py` with `config:=ur5_4` and `robot_ip:=<IP>` | Pick-place, Hanoi demo, etc. Use `EndEffector: "onrobot_2fg7"` (e.g. `ur5_pick_and_place_onrobot`). |
+| **2. Simulation** | UR5 + **Robotiq 2F-85** gripper in Gazebo | **ur5_2** | `moveit2.launch.py` with `config:=ur5_2` | Pick-place, Hanoi demo with `EndEffector: "ParallelGripper"` (e.g. `ur5_pick_and_place`). |
 
-- **Real (1):** External PC runs ROS 2; robot runs the External Control URCap program. Motion via ur_robot_driver + MoveIt 2; gripper via OnRobot 2FG7 backend (URScript/XML-RPC). For config **ur5_4**, the robot description (URDF) intentionally uses **Robotiq 2F-85 geometry** for planning, collision, and visualization; the physical gripper is OnRobot 2FG7 and is controlled via the OnRobot backend. This approximation is documented in `packages/ros2srrc_ur5/config/configurations.yaml`.
-- **Real UR5 + Robotiq 2F-85 (config ur5_2):** Supported. Bringup starts the Robotiq gripper server (`ros2_robotiqgripper`) with `robot_ip` so one launch brings up both arm and gripper. If your 2F-85 has a different IP than the robot, do not rely on bringup for the gripper: start the server separately, e.g. `ros2 run ros2_robotiqgripper server.py --ros-args -p IPAddress:=<GRIPPER_IP>`.
-- **Sim (2):** Gazebo + MoveIt 2 + ros2_control; same task layer (ExecuteProgram, Pick, Place, Hanoi) with a different gripper model and program YAML.
+- **Real (1):** External PC runs ROS 2; robot runs the External Control URCap program. Motion via ur_robot_driver + MoveIt 2; gripper via [onrobot_2fg7](https://github.com/davedovrat/onrobot_2fg7) (XML-RPC port 41414, OnRobot 2FG7 URCap). For config **ur5_4**, the robot description (URDF) intentionally uses **Robotiq 2F-85 geometry** for planning, collision, and visualization; the physical gripper is OnRobot 2FG7 and is controlled via `onrobot_2fg7`. See [OnRobot 2FG7 setup](doc/OnRobot2FG7Setup.md).
+- **Sim (2):** Gazebo + MoveIt 2 + ros2_control; same task layer (ExecuteProgram, Pick, Place, Hanoi) with `ParallelGripper` (Gazebo LinkAttacher + MoveG).
 
 ---
 
 ## About
 
-This project introduces a high-level execution layer for pick-and-place: **Pick** and **Place** primitives with configurable poses and approach/retreat, a **program runner** (ExecuteProgram) that executes task sequences (steps like Pick, Place, SetConstraints, SetConfiguration), and the **Tower of Hanoi** demo. The same layer runs in simulation (Gazebo + MoveIt 2) or on a real UR5 with an OnRobot 2FG7 gripper. Under the hood, motion and gripper use MoveIt 2 and the existing action/topic interface (/Move, /Robmove, /Robpose); our layer adds feasibility checks, constraints, configuration steps, and centralized error handling so you work with poses and task sequences instead of low-level motion.
+This project introduces a high-level execution layer for pick-and-place: **Pick** and **Place** primitives with configurable poses and approach/retreat, a **program runner** (ExecuteProgram) that executes task sequences (steps like Pick, Place, SetConstraints, SetConfiguration), and the **Tower of Hanoi** demo. The same layer runs in simulation (Gazebo + MoveIt 2) or on a real UR5 with an OnRobot RG gripper (UR_OnRobot_ROS2). Under the hood, motion and gripper use MoveIt 2 and the existing action/topic interface (/Move, /Robmove, /Robpose); our layer adds feasibility checks, constraints, configuration steps, and centralized error handling so you work with poses and task sequences instead of low-level motion.
 
 ---
 
@@ -170,10 +169,11 @@ Parameters that users can change, **introduced by this project**.
 | ----------- | ------- | ------- | --------------- |
 | **ROB_PARAM** | Robot planning group name for MoveIt (e.g. `ur5`). | `none` | C++ nodes: move, robmove, robpose |
 | **EE_PARAM** | MoveIt group / endeffector name (e.g. `robotiq_2f85` for sim ur5_2 and real ur5_4). Set from config `moveit_ee_group`. | `none` | C++ node: move |
-| **robot_ip** | Real robot IP; used by bringup and optionally by 2FG7 backend. | (empty) | robot.py; gripper_onrobot_2fg7.py |
-| **OnRobot2FG7_param_reader.robot_ip** | Robot IP for 2FG7 (XML-RPC/URScript). | (empty) | gripper_onrobot_2fg7.py (node `OnRobot2FG7_param_reader`) |
-| **protocol** (2FG7) | 2FG7 control: `xmlrpc` or `urscript`. | `xmlrpc` | gripper_onrobot_2fg7.py |
-| **force**, **speed**, **open_width_mm**, **gripper_id**, **xmlrpc_port**, **urscript_port**, **wait_after_cmd**, **jaw_width_open_mm**, **tcp_timeout**, **open_script_template**, **close_script_template** | 2FG7 gripper tuning and connection. | (see code defaults) | gripper_onrobot_2fg7.py |
+| **robot_ip** | Real robot IP; used by bringup (arm + tool communication). | (empty) | bringup_ur.launch.py |
+| **onrobot_type** | OnRobot gripper model: `rg2` or `rg6`. Set in `configurations.yaml` for ur5_4. | `rg2` | configurations.yaml; onrobot_driver launch |
+| **OnRobotRos2_gripper_client.position_topic** | Topic for finger width commands (metres). | `/onrobot/finger_width_controller/commands` | gripper_onrobot_ros2.py |
+| **OnRobotRos2_gripper_client.open_width_m** | Fully-open finger width (m). `0` = auto from onrobot_type (RG2: 0.085, RG6: 0.160). | `0` | gripper_onrobot_ros2.py |
+| **OnRobotRos2_gripper_client.settle_time_s** | Wait after each gripper command. | `0.5` | gripper_onrobot_ros2.py |
 
 *Note:* Our launch files set `use_sim_time` for simulation; that is a standard ROS 2 parameter, not introduced by this project.
 
@@ -200,6 +200,8 @@ ros2 launch ros2srrc_launch moveit2.launch.py package:=ros2srrc_ur5 config:=ur5_
 
 Wait until Gazebo and MoveIt 2 are fully loaded.
 
+In simulation, the UR5 is mounted on a **`robot_stand`** box defined in `packages/ros2srrc_ur5/urdf/` (default size 184.4 × 84 × 84 cm; tabletop at z = 0.84 m). It is part of the robot URDF spawned at launch—not a separate Gazebo object. After editing those xacro files, rebuild with `colcon build --packages-select ros2srrc_ur5` and relaunch.
+
 **Terminal 2 – run a task program:**
 
 ```console
@@ -212,19 +214,19 @@ Task programs live in `ros2srrc_execution/programs/`. Optional steps: **SetConst
 
 ### Real UR5 (OnRobot 2FG7, config ur5_4)
 
-See [Real robot setup (UR)](doc/RealRobotSetup.md) for URCap, External Control, and network prerequisites. Then:
+Install the 2FG7 driver packages first — see [OnRobot 2FG7 setup](doc/OnRobot2FG7Setup.md). Then:
 
 ```console
 source /opt/ros/humble/setup.bash
 source ~/clair-pick-and-place-ros2/install/setup.bash
-ros2 launch ros2srrc_launch bringup/bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
+ros2 launch ros2srrc_launch bringup_ur.launch.py package:=ros2srrc_ur5 config:=ur5_4 robot_ip:=<ROBOT_IP>
 ```
 
 ```console
-ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_2fg7
+ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_pick_and_place_onrobot
 ```
 
-If bringup is running, `robot_ip` is provided by the bringup params node. Otherwise pass it: `--ros-args -p OnRobot2FG7_param_reader.robot_ip:=<ROBOT_IP>`.
+Test gripper only: `ros2 run ros2srrc_execution test_2fg7_connectivity.py`
 
 ### To terminate
 
@@ -260,10 +262,16 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
    ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3
    ```
 
-   Optional arguments: `--num_cubes` (1–8), `--peg_spacing`, `--table_x`, `--table_y`, `--table_z`, `--cube_size_base`, `--cube_height`, `--skip_spawn`, `--initial_state`. Example with 5 cubes:
+   Optional arguments: `--num_cubes` (1–8), `--peg_spacing`, `--stand_z`, `--peg_x`, `--peg_center_y`, `--peg_x_inset`, `--cube_size_base`, `--cube_height`, `--skip_spawn`, `--initial_state`. (`--table_z` is deprecated; use `--stand_z`.) Example with 5 cubes:
 
    ```console
    ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 5 --peg_spacing 0.20
+   ```
+
+   Example: peg line on the reachable side of the stand (adjust if IK fails; see [Troubleshooting](#troubleshooting)):
+
+   ```console
+   ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3 --peg_x -0.50 --peg_center_y 0.0 --peg_spacing 0.20
    ```
 
    | Cubes | Moves | Approx. runtime |
@@ -272,11 +280,11 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
    | 3 | 7 | ~10 min |
    | 5 | 31 | 30+ min |
 
-   The demo spawns the table and cubes in Gazebo and uses `/object_poses/<name>` (from the Gazebo p3d plugin) for pick/place.
+   The demo spawns **cubes only** on the robot stand. The stand comes from the UR5 URDF at launch. Three pegs are placed in a line **along Y**, default **X ≈ +0.61 m** (31 cm in from the stand’s +X edge). Pick/place uses `/object_poses/<name>` (Gazebo p3d plugin). **Peg X must be within reach of the robot base** (`stand_joint` in the URDF); if pick/place reports `NO_IK_SOLUTION`, move `--peg_x` to the same side of the stand as the mounted base (often negative X with the current default mount).
 
-### On real UR5 (OnRobot 2FG7)
+### On real UR5 (OnRobot RG2/RG6)
 
-1. **Terminal 1 – start real robot bringup** with config `ur5_4`. See [Real robot setup (UR)](doc/RealRobotSetup.md). Install the UR driver first: `sudo apt install -y ros-humble-ur`.
+1. **Terminal 1 – start real robot bringup** with config `ur5_4`. See [Real robot setup (UR)](doc/RealRobotSetup.md) and [OnRobot ROS2 setup](doc/OnRobotROS2Setup.md).
 
    ```console
    source /opt/ros/humble/setup.bash
@@ -287,10 +295,10 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
 2. **Terminal 2 – run the Hanoi demo.** On real hardware use **`--skip_spawn`**. Object poses must be on **`/object_poses/<name>`** (`nav_msgs/Odometry`).
 
    ```console
-   ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3 --skip_spawn
+   ros2 run ros2srrc_execution hanoi_tower_demo.py --num_cubes 3 --skip_spawn --ee_type onrobot_ros2 --ee_link EE_robotiq_2f85
    ```
 
-   Adjust table/peg positions (`--table_x`, `--table_y`, `--peg_spacing`, etc.) to match your cell.
+   Adjust peg positions (`--peg_x`, `--peg_center_y`, `--peg_spacing`, `--stand_z`, etc.) to match your physical cell layout and robot mount.
 
 ---
 
@@ -304,6 +312,7 @@ Instructions to run the **Tower of Hanoi** demo (`hanoi_tower_demo.py`) on Gazeb
 | Orange ghost robot in RViz at home pose | MoveIt goal-state overlay; disabled in current RViz configs—restart `./launch_sim.sh` |
 | Two robots in RViz | One is the real/sim robot; the other was MoveIt's goal preview (see above). Gazebo window shows the same sim robot separately. |
 | Pick fails on stacked cubes (`INVALID_MOTION_PLAN`) | Only the **target** cube is removed from MoveIt during pick; other cubes stay for collision planning. Try `--peg_spacing 0.25` for 5+ cubes. |
+| Pick/place fails with `NO_IK_SOLUTION` on Hanoi | Pegs may be on the far side of the stand from the robot base. Check `stand_joint` in `packages/ros2srrc_ur5/urdf/*.xacro` and set `--peg_x` on the reachable side (e.g. `--peg_x -0.50` with the default mount at X ≈ −0.61 m). UR5 reach is ~0.85 m from `base_link`. |
 | Apt `Signed-By` conflict for ROS repo | Remove duplicate `ros2.list`; keep `ros2.sources` ([Installation](#1-ros-2-humble-and-system-packages)) |
 
 During pick, only the cube being grasped is temporarily removed from the MoveIt planning scene so the gripper can descend; all other cubes remain so paths avoid neighboring stacks.

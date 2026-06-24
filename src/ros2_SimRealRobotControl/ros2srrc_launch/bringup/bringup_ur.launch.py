@@ -35,9 +35,10 @@
 import os, sys, xacro, yaml
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import RegisterEventHandler, TimerAction
+from launch.actions import RegisterEventHandler, TimerAction, IncludeLaunchDescription
 from launch.event_handlers import OnProcessExit
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 
 # LOAD FILE:
 def load_file(package_name, file_path):
@@ -76,7 +77,8 @@ def AssignArgument(ARGUMENT):
 def GetCONFIG(CONFIGURATION, PKG_PATH):
     
     RESULT = {"Success": False, "ID": "", "Name": "", "urdf": "", "ee": "",
-              "srdf_ee_id": "", "moveit_ee_group": "", "ee_driver": "", "ee_link": ""}
+              "srdf_ee_id": "", "moveit_ee_group": "", "ee_driver": "", "ee_link": "",
+              "onrobot_type": "rg2"}
     
     YAML_PATH = PKG_PATH + "/config/configurations.yaml"
     
@@ -98,6 +100,7 @@ def GetCONFIG(CONFIGURATION, PKG_PATH):
             RESULT["moveit_ee_group"] = x.get("moveit_ee_group") or legacy_ee
             RESULT["ee_driver"] = x.get("ee_driver") or legacy_ee
             RESULT["ee_link"] = x.get("ee_link") or ("EE_" + (x.get("moveit_ee_group") or legacy_ee) if (x.get("moveit_ee_group") or legacy_ee) != "none" else "")
+            RESULT["onrobot_type"] = x.get("onrobot_type") or "rg2"
             RESULT["ee"] = RESULT["moveit_ee_group"] if (RESULT["moveit_ee_group"] and RESULT["moveit_ee_group"] != "none") else legacy_ee
             break
 
@@ -207,17 +210,33 @@ def generate_launch_description():
     else:
         EE = "true"
     
-    xacro.process_doc(doc, mappings={
+    xacro_mappings = {
         "EE": EE,
         "EE_name": CONFIGURATION["moveit_ee_group"] if EE == "true" else "none",
-
         "robot_ip": robot_ip,
         "bringup": "true",
-
         "script_filename": script_filename,
         "input_recipe_filename": input_recipe_filename,
         "output_recipe_filename": output_recipe_filename,
-    })
+    }
+    if CONFIGURATION["ee_driver"] == "onrobot_ros2":
+        xacro_mappings.update({
+            "use_tool_communication": "true",
+            "tool_baud_rate": "1000000",
+            "tool_parity": "2",
+            "tool_stop_bits": "1",
+            "tool_rx_idle_chars": "1.5",
+            "tool_tx_idle_chars": "3.5",
+            "tool_voltage": "24",
+        })
+
+    if CONFIGURATION["ee_driver"] == "onrobot_2fg7":
+        # 2FG7 uses XML-RPC on robot :41414 via OnRobot 2FG7 URCap — no Tool I/O / RS485 forwarder.
+        xacro_mappings.update({
+            "use_tool_communication": "false",
+        })
+
+    xacro.process_doc(doc, mappings=xacro_mappings)
     
     robot_description_config = doc.toxml()
     robot_description = {'robot_description': robot_description_config}
@@ -465,20 +484,77 @@ def generate_launch_description():
         )
         LD.add_action(Robotiq85JointStatePublisher)
 
-    # Robotiq server for Robotiq end-effectors that use /Robotiq_Gripper (2F-85 and HandE).
-    # Do not start Robotiq server for OnRobot 2FG7 (different protocol; 2FG7 uses URScript via TCP).
-    # OnRobot 2FG7: expose robot_ip via a small params node so ExecuteProgram can get it without -p OnRobot2FG7_param_reader.robot_ip.
+    # OnRobot 2FG7 via davedovrat/onrobot_2fg7 (XML-RPC on robot :41414).
     if CONFIGURATION["ee_driver"] == "onrobot_2fg7":
         OnRobot2FG7ParamsNode = Node(
-            name="onrobot_2fg7_bringup_params",
             package="ros2srrc_execution",
             executable="onrobot_2fg7_params_node.py",
+            name="onrobot_2fg7_bringup_params",
             output="screen",
             parameters=[{"robot_ip": robot_ip}],
         )
         LD.add_action(OnRobot2FG7ParamsNode)
-    # Start Robotiq server for both robotiq_2f85 (ur5_2) and RobotiqHandE (ur5_3); both use same /Robotiq_Gripper service.
-    # Server is parameterised with robot_ip (HandE is on-robot; 2F-85 often same network; if gripper has different IP, run server separately).
+
+        OnRobot2FG7GripNode = Node(
+            package="onrobot_2fg7",
+            executable="grip",
+            name="onrobot_2fg7_grip_service",
+            output="screen",
+            parameters=[{"ip": robot_ip, "port": 41414}],
+        )
+        OnRobot2FG7StatusNode = Node(
+            package="onrobot_2fg7",
+            executable="status",
+            name="onrobot_2fg7_status_publisher",
+            output="screen",
+            parameters=[{"ip": robot_ip, "port": 41414, "frequency": 2.0}],
+        )
+        LD.add_action(OnRobot2FG7GripNode)
+        LD.add_action(OnRobot2FG7StatusNode)
+
+    # OnRobot RG2/RG6 via UR_OnRobot_ROS2 (Modbus serial over UR Tool I/O).
+    if CONFIGURATION["ee_driver"] == "onrobot_ros2":
+        ToolCommNode = Node(
+            package="ur_robot_driver",
+            executable="tool_communication.py",
+            name="ur_tool_comm",
+            output="screen",
+            parameters=[{
+                "robot_ip": robot_ip,
+                "tcp_port": 54321,
+                "device_name": "/tmp/ttyUR",
+            }],
+        )
+        LD.add_action(ToolCommNode)
+
+        onrobot_type = CONFIGURATION.get("onrobot_type") or "rg2"
+        try:
+            onrobot_launch_path = os.path.join(
+                get_package_share_directory("onrobot_driver"),
+                "launch",
+                "onrobot_control.launch.py",
+            )
+            OnRobotGripperLaunch = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(onrobot_launch_path),
+                launch_arguments={
+                    "onrobot_type": onrobot_type,
+                    "connection_type": "serial",
+                    "device": "/tmp/ttyUR",
+                    "launch_rviz": "false",
+                    "launch_rsp": "false",
+                    "ns": "onrobot",
+                }.items(),
+            )
+            LD.add_action(OnRobotGripperLaunch)
+        except PackageNotFoundError:
+            print("")
+            print("WARNING: onrobot_driver not found. Install UR_OnRobot_ROS2 dependencies:")
+            print("  vcs import src --input repos/onrobot.repos --recursive")
+            print("  sudo apt install libnet1-dev && rosdep install -y --from-paths src --ignore-src")
+            print("  colcon build --symlink-install")
+            print("")
+
+    # Start Robotiq server for legacy Robotiq configs (ur5_2 real, ur5_3).
     if CONFIGURATION["ee_driver"] in ("robotiq_2f85", "RobotiqHandE/UR") or CONFIGURATION["moveit_ee_group"] == "robotiq_hande":
         LD.add_action(RobotiqServer)
 

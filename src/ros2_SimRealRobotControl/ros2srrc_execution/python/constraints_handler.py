@@ -54,7 +54,7 @@ def apply_constraints(step_dict: dict) -> dict:
         # Use existing rclpy context (e.g. from ExecuteProgram); do not shutdown
         node = Node("set_constraints_one_shot")
         pub = node.create_publisher(PlanningScene, "/planning_scene", 10)
-        time.sleep(0.2)
+        #time.sleep(0.2)
         rclpy.spin_once(node, timeout_sec=0.1)
 
         co = CollisionObject()
@@ -79,7 +79,7 @@ def apply_constraints(step_dict: dict) -> dict:
         pub.publish(scene)
         for _ in range(10):
             rclpy.spin_once(node, timeout_sec=0.05)
-        time.sleep(0.15)
+        #time.sleep(0.15)
         node.destroy_node()
         return {"Success": True, "Message": f"SetConstraints: added collision_object '{obj_id}'."}
     except Exception as e:

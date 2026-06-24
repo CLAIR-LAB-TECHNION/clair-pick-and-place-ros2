@@ -17,7 +17,7 @@ Sequence:
       id: blocker_box
       x: 0.15
       y: 0.48
-      z: 0.50
+      z: 0.84
       size_x: 0.5
       size_y: 0.5
       size_z: 0.4
@@ -44,7 +44,7 @@ Sequence:
     Input:
       x: 0.15
       y: 0.48
-      z: 0.50
+      z: 0.84
       qx: -0.5
       qy: 0.5
       qz: 0.5

@@ -131,10 +131,10 @@ class ObjectSpawner(Node):
         planning_scene.is_diff = True
         
         # Publish multiple times to ensure MoveIt receives it
-        import time
+        #import time
         for i in range(3):
             self.planning_scene_pub.publish(planning_scene)
-            time.sleep(0.1)
+            #time.sleep(0.1)
         
         self.get_logger().info(f'MoveIt: Added {args.name} as collision object (frame: {collision_object.header.frame_id}, pose: [{args.x}, {args.y}, {args.z}])')
         return True
@@ -200,8 +200,8 @@ def main():
     spawner = ObjectSpawner()
     
     # Brief time for publishers to connect
-    import time
-    time.sleep(0.2)
+    #import time
+    #time.sleep(0.2)
     
     success = True
     
@@ -212,7 +212,7 @@ def main():
     # Add to MoveIt
     if success and not args.gazebo_only:
         spawner.add_to_moveit(args)
-        time.sleep(0.2)
+        #time.sleep(0.2)
     
     spawner.get_logger().info('Done!')
     spawner.destroy_node()

@@ -67,7 +67,7 @@ def spawn_table(x, y, z):
         "--z", str(z),
         "--size_x", "1.0",
         "--size_y", "0.8",
-        "--size_z", "0.50",
+        "--size_z", "0.84",
         "--mass", "50.0",
         "--color", "white"
     ]
@@ -101,7 +101,7 @@ def pick_cube(object_name):
     return run_command(cmd, f"Picking {object_name}", timeout=60)
 
 
-def place_cube(x, y, z=0.50, object_name=None):
+def place_cube(x, y, z=0.865, object_name=None):
     """Place a cube using place.py"""
     cmd = [
         "ros2", "run", "ros2srrc_execution", "place.py",
@@ -122,8 +122,8 @@ def main():
                         help='Table X position (default: 0.0)')
     parser.add_argument('--table_y', type=float, default=0.48,
                         help='Table Y position (default: 0.48)')
-    parser.add_argument('--table_z', type=float, default=0.25,
-                        help='Table Z position (default: 0.25)')
+    parser.add_argument('--table_z', type=float, default=0.42,
+                        help='Table center Z position (default: 0.42; top surface at 0.84 m)')
     parser.add_argument('--cubes_x', type=float, default=0.13,
                         help='Cubes X position (default: 0.13)')
     parser.add_argument('--cubes_y', type=float, default=0.54,
@@ -156,9 +156,10 @@ def main():
     print("")
     
     # Calculate cube positions (stacked)
-    # Table center is at table_z, table height is 0.50m, so top surface is at table_z + 0.25
+    # Table center is at table_z, table height is 0.84 m, top surface at table_z + 0.42
     cube_size = args.cube_size
-    table_surface_z = args.table_z + 0.25  # Top of table (center + half height)
+    table_height = 0.84
+    table_surface_z = args.table_z + (table_height / 2.0)
     bottom_cube_z = table_surface_z + (cube_size / 2)  # Cube center on table surface
     top_cube_z = bottom_cube_z + cube_size  # Stacked on bottom cube
     
@@ -174,21 +175,21 @@ def main():
         if not spawn_table(args.table_x, args.table_y, args.table_z):
             print("\n✗ FAILED: Could not spawn table")
             return 1
-        time.sleep(1.0)  # Give time for object to settle
+        time.sleep(0.3)  # Give time for object to settle
     
     # Step 2: Spawn blue cube (bottom)
     if not args.skip_spawn:
         if not spawn_cube("cube_blue", args.cubes_x, args.cubes_y, bottom_cube_z, "blue", cube_size):
             print("\n✗ FAILED: Could not spawn blue cube")
             return 1
-        time.sleep(1.0)  # Give time for object to settle
+        time.sleep(0.4)  # Give time for object to settle
     
     # Step 3: Spawn red cube (top, stacked)
     if not args.skip_spawn:
         if not spawn_cube("cube_red", args.cubes_x, args.cubes_y, top_cube_z, "red", cube_size):
             print("\n✗ FAILED: Could not spawn red cube")
             return 1
-        time.sleep(2.0)  # Give time for objects to settle and stabilize
+        time.sleep(1.0)  # Give time for objects to settle and stabilize
     
     # Step 4: Pick red cube (top) and place on table
     print("\n" + "="*60)
@@ -202,7 +203,7 @@ def main():
     # time.sleep(1.0)  # Brief pause between operations
     
     # Place red cube on table
-    table_surface_z = args.table_z + 0.25  # Top of table
+    table_surface_z = args.table_z + 0.42  # Top of table (0.84 m with default center)
     place_z = table_surface_z + (cube_size / 2)  # Cube center on table surface
     if not place_cube(args.place_x, args.place_y, place_z, "cube_red"):
         print("\n✗ FAILED: Could not place red cube")

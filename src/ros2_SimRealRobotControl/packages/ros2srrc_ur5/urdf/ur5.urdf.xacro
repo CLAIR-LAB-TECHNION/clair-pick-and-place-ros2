@@ -84,7 +84,7 @@
   <!-- World: LINK -->
   <link name="world"/>
   
-  <!-- Robot Stand: LINK (length X=184.4cm, width Y=84cm, height Z=50cm) -->
+  <!-- Robot Stand: LINK (length X=84cm, width Y=184.4cm, height Z=84cm; top surface at z=0.84m) -->
   <link name='robot_stand'>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -94,13 +94,13 @@
     <collision name='collision'>
       <origin xyz="0 0 0" rpy=" 0 0 0"/> 
       <geometry>
-        <box size = "1.844 0.84 0.5"/>
+        <box size = "0.84 1.844 0.84"/>
       </geometry>
     </collision>
     <visual name='chassis_visual'>
       <origin xyz="0 0 0" rpy=" 0 0 0"/>
       <geometry>
-        <box size = "1.844 0.84 0.5"/>
+        <box size = "0.84 1.844 0.84"/>
       </geometry>
     </visual>
   </link>
@@ -109,14 +109,14 @@
   <joint name="world_joint" type="fixed">
     <parent link= "world" />
     <child link = "robot_stand" />
-    <origin xyz="0.0 0.0 0.25" rpy="0.0 0.0 0.0" />
+    <origin xyz="0.0 0.0 0.42" rpy="0.0 0.0 0.0" />
   </joint>
 
-  <!-- Robot base: 31cm from bottom (-X) edge, 11.2cm from left (+Y) edge -->
+  <!-- Robot base: 31cm from bottom (-Y) edge, centered on short (X) axis -->
   <joint name="stand_joint" type="fixed">
     <parent link= "robot_stand" />
     <child link = "base_link" />
-    <origin xyz="-0.612 0.0 0.255" rpy="0.0 0.0 0.0" /> 
+    <origin xyz="0.0 -0.612 0.425" rpy="0.0 0.0 0.0" /> 
   </joint>
 
 </robot>

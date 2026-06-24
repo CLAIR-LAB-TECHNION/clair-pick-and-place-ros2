@@ -51,7 +51,7 @@ Run the **blocker** program: adds a big collision box in front of the robot at t
 ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution program:=ur5_setconstraints_with_blocker
 ```
 
-**Expected:** Step 1 (SetConstraints) succeeds. Step 2 (MoveJ home) succeeds. Step 3 (RobMove to 0.15, 0.48, 0.50) should **fail** with a planning error (e.g. `GOAL_IN_COLLISION` or `PLANNING_FAILED`) because the goal is inside the box. The program then exits with "Execution FAILED!". If the planner sometimes finds a detour, you might see success instead; in that case the box is not fully blocking the goal.
+**Expected:** Step 1 (SetConstraints) succeeds. Step 2 (MoveJ home) succeeds. Step 3 (RobMove to 0.15, 0.48, 0.84) should **fail** with a planning error (e.g. `GOAL_IN_COLLISION` or `PLANNING_FAILED`) because the goal is inside the box. The program then exits with "Execution FAILED!". If the planner sometimes finds a detour, you might see success instead; in that case the box is not fully blocking the goal.
 
 ---
 
@@ -71,8 +71,8 @@ ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution progra
 
 | File | Purpose |
 |------|--------|
-| `ur5_setconstraints_baseline.yaml` | Home → Traverse to (0.15, 0.48, 0.50) → home. No constraints. Uses ParallelGripper. |
+| `ur5_setconstraints_baseline.yaml` | Home → Traverse to (0.15, 0.48, 0.865) → home. No constraints. Uses ParallelGripper. |
 | `ur5_setconstraints_baseline_no_ee.yaml` | Same sequence as baseline but `EndEffector: None` (like ur5_demo). Use if baseline fails to isolate EE vs launch. |
 | `ur5_setconstraints_with_blocker.yaml` | SetConstraints (big box at goal) → home → Traverse to same pose (blocked) → home. |
 
-The blocker box is 0.5×0.5×0.4 m at (0.15, 0.48, 0.50), so the RobMove goal lies inside it and planning should fail.
+The blocker box is 0.5×0.5×0.4 m at (0.15, 0.48, 0.84), so the RobMove goal lies inside it and planning should fail.

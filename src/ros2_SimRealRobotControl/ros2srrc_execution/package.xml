@@ -31,6 +31,7 @@
   <depend>ros2_linkpose</depend>
 
   <depend>ros2_robotiqgripper</depend>
+  <exec_depend>onrobot_2fg7_interfaces</exec_depend>
   
   <!-- ABB robot support (optional, only needed for ABB robots) -->
   <!-- <depend>abb_robot_msgs</depend> -->
