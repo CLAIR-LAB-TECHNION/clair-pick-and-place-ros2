@@ -150,6 +150,7 @@ install(PROGRAMS
   python/pick.py
   python/place_manual.py
   python/place.py
+  python/real_ur5_2fg7_motion.py
   python/move_to_home.py
   python/hanoi_tower_demo.py
   python/hanoi_pose_publisher.py

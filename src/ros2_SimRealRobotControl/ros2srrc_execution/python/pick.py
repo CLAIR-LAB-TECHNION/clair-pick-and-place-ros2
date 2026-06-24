@@ -28,6 +28,8 @@ Optional arguments:
     fallback_enabled:=true      Enable fallback mechanism (default: true)
     max_attempts:=12            Maximum fallback attempts (default: 12)
     grasp_yaw_offset_deg:=<deg> Extra yaw (deg) applied to grasp orientation (default: 0 = same as YAML)
+    board_height:=0.02          Physical board on stand (m); used for 2FG7 Z auto-calibration
+    z_is_pick_ref:=true|false   Force z as pick ref (0.84) or cube center (0.865); default auto
     pose_only:=true             Wait for pose from /object_poses/<name> and exit (no robot/execute); validates pose path.
     
 Fallback Behavior:
@@ -419,6 +421,37 @@ def main(args=None):
             print(f"[Pick]: Object not in planning scene (or no geometry) -> using default width {DEFAULT_CUBE_SIZE}m; gripper close % from width (same logic as Hanoi).")
             print(f"  (Tip: Pass cube_size:=<value> or ensure object is in MoveIt scene to auto-detect size)")
     print("")
+
+    # UR5+2FG7: same Z calibration as Hanoi when offsets not passed explicitly
+    if _is_2fg7 and grasp_z_arg is None and extra_descend_arg is None:
+        from real_ur5_2fg7_motion import (
+            REAL_DEFAULT_BOARD_HEIGHT_M,
+            compute_real_ee_motion_params,
+            infer_pick_ref_and_center,
+        )
+        board_height_arg = AssignArgument("board_height")
+        board_height = float(
+            board_height_arg if board_height_arg is not None else REAL_DEFAULT_BOARD_HEIGHT_M
+        )
+        z_is_pick_ref_raw = AssignArgument("z_is_pick_ref")
+        z_is_pick_ref = None
+        if z_is_pick_ref_raw is not None:
+            z_is_pick_ref = z_is_pick_ref_raw.strip().lower() in ("1", "true", "yes")
+        z_pick_ref, z_center = infer_pick_ref_and_center(
+            object_pose.z, cube_size_for_config, board_height, z_is_pick_ref
+        )
+        grasp_z_offset, grasp_extra_descend_m, z_ee = compute_real_ee_motion_params(
+            z_pick_ref, z_center
+        )
+        object_pose.z = z_pick_ref
+        z_moveit = z_pick_ref + grasp_z_offset
+        print("[Pick]: 2FG7 auto Z calibration (same as Hanoi):")
+        print(f"  pick_ref Z={z_pick_ref:.3f}m, center Z={z_center:.3f}m, board={board_height:.3f}m")
+        print(
+            f"  MoveIt grasp Z={z_moveit:.3f}m, EE target Z={z_ee:.3f}m, "
+            f"grasp_z_offset={grasp_z_offset:.3f}m, extra_descend={grasp_extra_descend_m * 1000:.0f}mm"
+        )
+        print("")
     
     if pose_only:
         print("")

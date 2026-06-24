@@ -129,6 +129,8 @@ def main(args=None):
     extra_descend_arg = AssignArgument("place_extra_descend_m")
     place_center_z_arg = AssignArgument("place_center_z")
     _is_2fg7 = ee_type == "onrobot_2fg7"
+    board_height_arg = AssignArgument("board_height")
+    z_is_pick_ref_raw = AssignArgument("z_is_pick_ref")
 
     support_cubes_arg = AssignArgument("support_cubes")
     support_cube_names = [
@@ -144,20 +146,56 @@ def main(args=None):
 
     # Target z is cube CENTER (same as pick / MoveIt). Negative offset = lower release in planner.
     _default_place_z = "-0.05" if _is_2fg7 else "-0.01"
-    if place_z_arg is not None:
-        place_z_offset = float(place_z_arg)
-    elif cube_size and place_center_z_arg is None:
-        # Keep MoveIt target shallow — table stand collision blocks deeper planner descent
-        place_z_offset = -0.01
-        print(f"[Place]: cube_size:={cube_size} with center z — place_z_offset={place_z_offset:.3f}m")
-    else:
-        place_z_offset = float(_default_place_z)
-        print(f"[Place]: Using default place_z_offset: {place_z_offset:.3f}m")
+    place_z_offset = None
+    place_extra_descend_m = None
+    place_center_z = float(place_center_z_arg) if place_center_z_arg is not None else None
 
-    if extra_descend_arg is not None:
-        place_extra_descend_m = float(extra_descend_arg)
-    else:
-        place_extra_descend_m = 0.0
+    if _is_2fg7 and place_z_arg is None and extra_descend_arg is None:
+        from real_ur5_2fg7_motion import (
+            REAL_DEFAULT_BOARD_HEIGHT_M,
+            compute_real_ee_motion_params,
+            infer_pick_ref_and_center,
+        )
+        cube_size_f = float(cube_size) if cube_size else 0.05
+        board_height = float(
+            board_height_arg if board_height_arg is not None else REAL_DEFAULT_BOARD_HEIGHT_M
+        )
+        z_is_pick_ref = None
+        if z_is_pick_ref_raw is not None:
+            z_is_pick_ref = z_is_pick_ref_raw.strip().lower() in ("1", "true", "yes")
+        z_ref, z_center = infer_pick_ref_and_center(
+            float(z), cube_size_f, board_height, z_is_pick_ref
+        )
+        if place_center_z is None:
+            place_center_z = z_center
+        place_z_offset, place_extra_descend_m, z_ee = compute_real_ee_motion_params(
+            z_ref, place_center_z
+        )
+        z = str(z_ref)
+        print("[Place]: 2FG7 auto Z calibration (same as Hanoi):")
+        print(f"  place_ref Z={z_ref:.3f}m, center Z={place_center_z:.3f}m, board={board_height:.3f}m")
+        print(
+            f"  MoveIt place Z={z_ref + place_z_offset:.3f}m, EE target Z={z_ee:.3f}m, "
+            f"place_z_offset={place_z_offset:.3f}m, extra_descend={place_extra_descend_m * 1000:.0f}mm"
+        )
+        print("")
+
+    if place_z_offset is None:
+        if place_z_arg is not None:
+            place_z_offset = float(place_z_arg)
+        elif cube_size and place_center_z is None and not _is_2fg7:
+            # Keep MoveIt target shallow — table stand collision blocks deeper planner descent
+            place_z_offset = -0.01
+            print(f"[Place]: cube_size:={cube_size} with center z — place_z_offset={place_z_offset:.3f}m")
+        else:
+            place_z_offset = float(_default_place_z)
+            print(f"[Place]: Using default place_z_offset: {place_z_offset:.3f}m")
+
+    if place_extra_descend_m is None:
+        if extra_descend_arg is not None:
+            place_extra_descend_m = float(extra_descend_arg)
+        else:
+            place_extra_descend_m = 0.0
     if place_extra_descend_m > 0.001:
         print(f"[Place]: place_extra_descend_m:={place_extra_descend_m:.3f}m (physical MoveL after MoveIt place pose)")
     
@@ -290,7 +328,6 @@ def main(args=None):
     print("")
     
     cube_size_for_scene = float(cube_size) if cube_size else 0.05
-    place_center_z = float(place_center_z_arg) if place_center_z_arg is not None else None
 
     config = {
         "approach_height": approach_height,

@@ -64,6 +64,8 @@ REAL_STACKED_PLACE_Z_LIFT = 0.02   # raise MoveIt place Z when stacking (less ph
 REAL_STACKED_PICK_Z_LIFT = 0.02    # raise MoveIt grasp Z when picking from a stack (solo picks unchanged)
 REAL_POSE_PUBLISH_DURATION_S = 0.5  # hanoi_publish_pose keepalive (was 3s; pick.py also gets explicit x/y/z)
 
+from real_ur5_2fg7_motion import compute_real_ee_motion_params
+
 
 def _stand_edge_insets(x, y):
     """Meters from robot_stand box edges (matches URDF 0.84 × 1.844 m stand, centered at origin)."""
@@ -236,18 +238,8 @@ class TowerOfHanoi:
         return z
 
     def compute_real_ee_motion_params(self, z_pick_ref, z_center):
-        """
-        Return (moveit_z_offset, extra_descend_m, z_ee_target) for pick.py / place.py.
-
-        object_pose.z = stand-top pick reference (0.84 + cubes below).
-        MoveIt grasp is anchored just above the required EE height (not pick_ref + fixed
-        offset), so stacked cubes need only ~10 mm extra descend instead of 40 mm.
-        """
-        z_ee_target = z_center - REAL_EE_TO_FINGER_Z
-        z_moveit_z = max(z_ee_target + REAL_GRASP_Z_OFFSET_LOW, REAL_MIN_MOVEIT_GRASP_Z)
-        moveit_z_offset = round(z_moveit_z - z_pick_ref, 4)
-        extra_descend = round(max(0.0, z_moveit_z - z_ee_target), 4)
-        return moveit_z_offset, extra_descend, z_ee_target
+        """Delegate to shared UR5+2FG7 calibration (pick.py / place.py use the same function)."""
+        return compute_real_ee_motion_params(z_pick_ref, z_center)
     
     def spawn_initial_state(self):
         """Spawn all cubes on the first peg (peg 0)"""
