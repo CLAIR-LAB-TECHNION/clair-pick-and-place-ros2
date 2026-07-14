@@ -41,13 +41,13 @@ Legacy **RG2/RG6** over Tool I/O (`onrobot_ros2`) is still supported via a separ
 
 One task program, two deployment backends:
 
-![General architecture overview](doc/diagrams/00-general-architecture.svg)
+![General architecture overview](doc/diagrams/general_archticture.png)
 
 ### Class diagram
 
 HLD-level UML of the execution layer (Pick, Place, robot client, gripper):
 
-![Class diagram](doc/diagrams/07-class-diagram.svg)
+![Class diagram](doc/diagrams/class_diagram.png)
 
 More diagrams (control flow, packages, data flow, deployment, ExecuteProgram dispatch): [doc/diagrams/](doc/diagrams/).
 
