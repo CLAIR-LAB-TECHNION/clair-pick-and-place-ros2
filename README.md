@@ -1,6 +1,6 @@
 # clair-pick-and-place-ros2
 
-**Sim-to-real pick-and-place for a UR5 arm**, with Tower of Hanoi as the stress-test task.
+**Sim-to-real pick-and-place for a UR5e arm**, with Tower of Hanoi as the stress-test task.
 
 This ROS 2 Humble workspace adds a high-level execution layer—**Pick**, **Place**, and a YAML **program runner** (`ExecuteProgram`)—that runs the same task logic in **Gazebo** and on a **real UR5** with an **OnRobot 2FG7** gripper. The Hanoi algorithm is small; the engineering work is reliable grasping, motion planning, and sim-to-real integration.
 
@@ -24,8 +24,8 @@ This ROS 2 Humble workspace adds a high-level execution layer—**Pick**, **Plac
 
 | Use case          | Hardware                          | Config  | Launch                                               | Programs / demos                 |
 | ----------------- | --------------------------------- | ------- | ---------------------------------------------------- | -------------------------------- |
-| **1. Real robot** | UR5 + **OnRobot 2FG7**            | `ur5_4` | `bringup/bringup_ur.launch.py` with `robot_ip:=<IP>` | `EndEffector: "onrobot_2fg7"`    |
-| **2. Simulation** | UR5 + **Robotiq 2F-85** in Gazebo | `ur5_2` | `moveit2.launch.py`                                  | `EndEffector: "ParallelGripper"` |
+| **1. Real robot** | UR5e + **OnRobot 2FG7**            | `ur5_4` | `bringup/bringup_ur.launch.py` with `robot_ip:=<IP>` | `EndEffector: "onrobot_2fg7"`    |
+| **2. Simulation** | UR5e + **Robotiq 2F-85** in Gazebo | `ur5_2` | `moveit2.launch.py`                                  | `EndEffector: "ParallelGripper"` |
 
 
 - **Real:** External PC runs ROS 2; the teach pendant runs the External Control URCap. Motion uses `ur_robot_driver` + MoveIt 2; the gripper uses [onrobot_2fg7](https://github.com/davedovrat/onrobot_2fg7) (XML-RPC on the robot, port **41414**). For `ur5_4`, the URDF keeps **Robotiq 2F-85 geometry** for planning and visualization; the physical tool is the 2FG7. See [OnRobot 2FG7 setup](doc/OnRobot2FG7Setup.md).
@@ -39,7 +39,7 @@ Legacy **RG2/RG6** over Tool I/O (`onrobot_ros2`) is still supported via a separ
 
 ## Architecture
 
-One task program, two deployment backends:
+Software layers from the task program down to Gazebo or the real UR5e (same Pick/Place path; different backends):
 
 ![General architecture overview](doc/diagrams/general_architecture.png)
 
@@ -59,8 +59,8 @@ More diagrams (control flow, packages, data flow, deployment, ExecuteProgram dis
 | **ros2srrc_launch**                                                 | Launch files: Gazebo + MoveIt 2 (sim), bringup (real UR)                                                                |
 | **ros2srrc_execution**                                              | C++ nodes (`move`, `robmove`, `robpose`); Python: ExecuteProgram, Pick/Place, Hanoi demo, gripper clients, spawn/remove |
 | **ros2srrc_data**                                                   | Custom messages (e.g. Robpose) and actions (Move, Robmove, Sequence)                                                    |
-| **ros2srrc_moveit**                                                 | MoveIt 2 config (SRDF, kinematics) for UR5 and end-effectors                                                            |
-| **ros2srrc_robots**                                                 | UR5 URDF/xacro, controller YAML                                                                                         |
+| **ros2srrc_moveit**                                                 | MoveIt 2 config (SRDF, kinematics) for UR5e and end-effectors                                                            |
+| **ros2srrc_robots**                                                 | UR5e URDF/xacro, controller YAML                                                                                         |
 | **ros2srrc_endeffectors**                                           | End-effector models (parallel gripper for sim; geometry shared with real planning)                                      |
 | **ros2srrc_ur5**                                                    | Robot configurations (`ur5_2` sim, `ur5_4` real + 2FG7)                                                                 |
 | **ros2srrc_gazebo**                                                 | Gazebo worlds                                                                                                           |
@@ -237,7 +237,7 @@ ros2 launch ros2srrc_launch moveit2.launch.py package:=ros2srrc_ur5 config:=ur5_
 
 Wait until Gazebo and MoveIt 2 are fully loaded.
 
-In simulation, the UR5 sits on a `robot_stand` from the URDF (tabletop at z ≈ 0.84 m). After editing those xacro files, rebuild with `colcon build --packages-select ros2srrc_ur5` and relaunch.
+In simulation, the UR5e sits on a `robot_stand` from the URDF (tabletop at z ≈ 0.84 m). After editing those xacro files, rebuild with `colcon build --packages-select ros2srrc_ur5` and relaunch.
 
 **Terminal 2 — run a task program:**
 
@@ -249,7 +249,7 @@ ros2 run ros2srrc_execution ExecuteProgram.py package:=ros2srrc_execution progra
 
 Programs live in `ros2srrc_execution/programs/`. Optional step types include **SetConstraints** and **SetConfiguration**.
 
-### Real UR5 (OnRobot 2FG7, config `ur5_4`)
+### Real UR5e (OnRobot 2FG7, config `ur5_4`)
 
 Install the 2FG7 driver first — [OnRobot 2FG7 setup](doc/OnRobot2FG7Setup.md). Then:
 
@@ -354,7 +354,7 @@ Use Ctrl+C in each terminal. On the **real robot**, stop ExecuteProgram / Pick /
 | `MoveG:FAILED` on gripper close (sim)           | Rebuild, relaunch; ensure gripper controllers load from installed `ros2srrc_endeffectors` paths                  |
 | Orange “ghost” robot in RViz                    | MoveIt goal-state overlay; restart `./launch_sim.sh`                                                             |
 | Pick fails on stacks (`INVALID_MOTION_PLAN`)    | Only the **target** cube is removed from the planning scene; try `--peg_spacing 0.25` for 5+ cubes               |
-| Hanoi `NO_IK_SOLUTION`                          | Pegs may be out of reach; set `--peg_x` on the reachable side of the stand (UR5 reach ≈ 0.85 m from `base_link`) |
+| Hanoi `NO_IK_SOLUTION`                          | Pegs may be out of reach; set `--peg_x` on the reachable side of the stand (UR5e reach ≈ 0.85 m from `base_link`) |
 | Apt `Signed-By` conflict for ROS repo           | Remove duplicate `ros2.list`; keep `ros2.sources`                                                                |
 
 

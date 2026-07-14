@@ -15,3 +15,6 @@ __pycache__/
 
 # Git
 *.swp
+
+# Large media (keep local; GitHub 100MB limit)
+*.mov
