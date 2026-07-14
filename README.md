@@ -41,7 +41,7 @@ Legacy **RG2/RG6** over Tool I/O (`onrobot_ros2`) is still supported via a separ
 
 One task program, two deployment backends:
 
-![General architecture overview](doc/diagrams/general_archticture.png)
+![General architecture overview](doc/diagrams/general_architecture.png)
 
 ### Class diagram
 
