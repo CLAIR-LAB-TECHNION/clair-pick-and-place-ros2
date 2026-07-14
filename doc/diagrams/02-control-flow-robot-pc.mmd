@@ -2,12 +2,12 @@ flowchart LR
   subgraph Robot["UR Robot Controller (or Gazebo sim)"]
     direction TB
     URD["ur_robot_driver / Gazebo"]
-    CTRL["joint_trajectory_controller"]
+    CTRL["joint_trajectory_controller (sim)\nscaled_joint_trajectory_controller (real UR)"]
   end
 
   subgraph PC["Control PC / ROS2 VM"]
     direction TB
-    Exec["ExecuteProgram\n(Pick, Place, constraints,\nfeasibility, error_handler)"]
+    Exec["ExecuteProgram\n(Pick, Place, constraints,\nerror_handler)"]
     move["move\n(/Move action server)"]
     robmove["robmove\n(/Robmove action server)"]
     robpose["robpose"]

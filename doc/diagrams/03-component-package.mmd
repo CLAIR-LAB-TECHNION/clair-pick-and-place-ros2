@@ -10,12 +10,12 @@ flowchart TB
         Constraints[ConstraintsHandler]
         Config[ConfigurationHandler]
         Error[ErrorHandler]
-        Feasibility[feasibility_check]
+        Feasibility["feasibility (MoveIt in move/robmove)"]
         Spawn[SpawnObject / RemoveObject]
         subgraph Grippers["Gripper clients"]
             PG[ParallelGripper]
             TwoFG7[OnRobot 2FG7]
-            Robotiq[Robotiq]
+            Robotiq["Robotiq (optional)"]
         end
         RBT[Robot client]
     end
@@ -60,6 +60,8 @@ flowchart TB
     robpose --> Msgs
     move --> MoveIt
     robmove --> MoveIt
+    move -.-> Feasibility
+    robmove -.-> Feasibility
     RBT --> Msgs
     Grippers --> LinkAttach
     Grippers --> TwoFG7

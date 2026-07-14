@@ -58,8 +58,7 @@ classDiagram
         +open()
         +close()
     }
-    class OnRobot2FG7Backend {
-        -robot_ip_
+    class OnRobot2FG7PkgBackend {
         +open()
         +close()
     }
@@ -81,6 +80,6 @@ classDiagram
     rclcppNode <|-- RobMoveCLIENT
     RBT *-- MoveCLIENT
     RBT *-- RobMoveCLIENT
-    GripperInterface <|-- OnRobot2FG7Backend
+    GripperInterface <|-- OnRobot2FG7PkgBackend
     GripperInterface <|-- ParallelGripperAdapter
     ExecuteProgram ..> GripperInterface

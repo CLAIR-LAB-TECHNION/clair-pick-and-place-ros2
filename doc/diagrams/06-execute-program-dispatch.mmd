@@ -1,25 +1,31 @@
-flowchart LR
-    YAML[program.yaml] --> Seq[Sequence]
-    Seq --> S1[SetConfiguration]
-    Seq --> S2[SetConstraints]
-    Seq --> S3[MoveJ RobMove]
-    Seq --> S4[Pick]
-    Seq --> S5[Place]
-    Seq --> S6[ParallelGripper 2FG7 Robotiq]
-    Seq --> S7[Traverse]
+flowchart TB
+    YAML[program.yaml<br/>Specifications + Sequence] --> Exec[ExecuteProgram]
 
-    S4 --> RBT[Robot client]
-    S4 --> GRIP[Gripper]
-    S5 --> RBT
-    S5 --> GRIP
-    S6 --> GRIP
-    S1 --> Config[ConfigurationHandler]
-    S2 --> Constraints[ConstraintsHandler]
-    S3 --> RBT
-    S7 --> RBT
+    Exec --> Load[Load RBT + gripper_factory]
+    Load --> Loop[For each step in Sequence]
 
-    RBT --> MoveNode["/Move"]
-    RBT --> RobmoveNode["/Robmove"]
-    GRIP --> AttachNode["/ATTACHLINK"]
-    GRIP --> DetachNode["/DETACHLINK"]
-    Constraints --> PlanningNode["/planning_scene"]
+    Loop --> Motion["Motion steps<br/>MoveJ · RobMove · MoveL · MoveG · …"]
+    Loop --> HLD["Pick · Place · PutDown"]
+    Loop --> Grip["Gripper steps<br/>ParallelGripper · onrobot_2fg7 · onrobot_ros2"]
+    Loop --> S1[SetConfiguration]
+    Loop --> S2[SetConstraints]
+
+    Motion --> RBT[RBT robot client]
+    HLD --> RBT
+    HLD --> GRIP[GripperInterface]
+    Grip --> GRIP
+
+    S1 --> Config[configuration_handler]
+    S2 --> Constraints[constraints_handler]
+
+    RBT --> MoveA["/Move action"]
+    RBT --> RobmoveA["/Robmove action"]
+
+    GRIP -->|sim| Attach["/ATTACHLINK · /DETACHLINK"]
+    GRIP -->|sim| MoveG[MoveG via /Move]
+    GRIP -->|real 2FG7| GripSvc["/grip service"]
+    GRIP -->|real RG2/RG6| OnRobotRos[onrobot_ros2 driver]
+
+    Constraints --> Planning["/planning_scene"]
+
+    Loop --> Err[error_handler<br/>per step]

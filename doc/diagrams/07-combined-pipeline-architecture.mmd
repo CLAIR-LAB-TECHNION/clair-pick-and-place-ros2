@@ -20,9 +20,28 @@
 }}%%
 flowchart LR
     subgraph Shared["ONE TASK PROGRAM"]
-        direction LR
-        YAML["YAML program"] --> EP["ExecuteProgram"] --> PP["Pick and Place"]
-        Hanoi["Tower of Hanoi"] --> EP
+        direction TB
+
+        YAML["YAML program"]
+        Hanoi["Tower of Hanoi"]
+
+        YAML ==> EP["ExecuteProgram"]
+        EP ==> Load["Load robot & gripper"]
+        Load ==> Loop["For each step"]
+
+        Hanoi ==> PP["Pick and Place"]
+
+        Loop --> Motion["Motion"]
+        Loop --> Pick["Pick"]
+        Loop --> Place["Place"]
+        Loop --> Grip["Gripper"]
+
+        Pick ==> PP
+        Place ==> PP
+
+        Motion ==> Out["Execute on sim or real"]
+        PP ==> Out
+        Grip ==> Out
     end
 
     subgraph Sim["SIMULATION"]
@@ -35,14 +54,18 @@ flowchart LR
         Arm["UR5 robot"] --> PlanR["Motion planning"] --> GripR["Real gripper"]
     end
 
-    PP ==> PlanS
-    PP ==> PlanR
+    Out ==> PlanS
+    Out ==> PlanR
 
     classDef hero fill:#003e7e,stroke:#0071bc,stroke-width:3px,color:#fff
+    classDef step fill:#d4eaf7,stroke:#0071bc,stroke-width:2px,color:#003e7e
+    classDef out fill:#0071bc,stroke:#003e7e,stroke-width:2px,color:#fff
     classDef simNode fill:#d4eaf7,stroke:#0071bc,stroke-width:2px,color:#003e7e
     classDef realNode fill:#fff0d6,stroke:#003e7e,stroke-width:2px,color:#3c3c3c
 
-    class YAML,EP,PP,Hanoi hero
+    class YAML,Hanoi,EP,Load,Loop,PP hero
+    class Motion,Pick,Place,Grip step
+    class Out out
     class GZ,PlanS,GripS simNode
     class Arm,PlanR,GripR realNode
 

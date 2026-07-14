@@ -2,6 +2,7 @@ flowchart LR
     subgraph Publishers
         robpose_node[robpose node]
         p3d[Gazebo p3d / objectpose]
+        pose_pub["hanoi_publish_pose - real"]
         scene[ConstraintsHandler / Spawn/Remove]
     end
 
@@ -19,12 +20,14 @@ flowchart LR
     subgraph Services
         S_Attach["/ATTACHLINK"]
         S_Detach["/DETACHLINK"]
-        S_Robotiq["/RobotiqGripper (optional)"]
+        S_Grip["/grip - onrobot_2fg7 real"]
+        S_Robotiq["/Robotiq_Gripper (optional)"]
     end
 
     subgraph Consumers
         PickPlace[Pick / Place]
         PG[ParallelGripper]
+        FG7[OnRobot 2FG7 backend]
         VG[VacuumGripper]
         Move[move node]
         Robmove[robmove node]
@@ -32,6 +35,7 @@ flowchart LR
 
     robpose_node --> T_Robpose
     p3d --> T_ObjectPose
+    pose_pub --> T_ObjectPose
     scene --> T_Planning
 
     T_Robpose --> PickPlace
@@ -47,5 +51,6 @@ flowchart LR
 
     PG --> S_Attach
     PG --> S_Detach
+    FG7 --> S_Grip
     VG --> S_Attach
     VG --> S_Detach
